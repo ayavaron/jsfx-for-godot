@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.obj binary
+*.dll binary
+*.wasm binary
+*.ps1 text eol=crlf
+third_party/** -text

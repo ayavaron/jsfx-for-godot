@@ -1,0 +1,8 @@
+// Shared LFO helpers for the demo effects (MIT).
+@init
+function lfo_shape(phase, shape)
+(
+  shape == 0 ? 0.5 + 0.5 * sin(2 * $pi * phase) :   // sine
+  shape == 1 ? (phase < 0.5 ? 2 * phase : 2 - 2 * phase) :  // triangle
+  (phase < 0.5 ? 1 : 0);                            // square
+);

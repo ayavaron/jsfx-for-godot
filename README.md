@@ -1,0 +1,307 @@
+# JSFX for Godot
+
+Run REAPER's **JSFX** audio effects inside **Godot 4**, and drive their
+parameters from gameplay.
+
+JSFX is the text-based DSP scripting language REAPER uses for its built-in
+and community effects: compressors, filters, delays, distortion, spectral
+tools and more, written in Cockos' EEL2 language. This GDExtension compiles
+`.jsfx` files with the real EEL2 engine (the x64 JIT on desktop) and runs them
+as ordinary Godot `AudioEffect`s on your audio buses. Each JSFX slider becomes
+a Godot property, so you can automate it with `Tween`, `AnimationPlayer` or
+one line of GDScript.
+
+```gdscript
+var lowpass := load("res://effects/lowpass.jsfx") as AudioEffectJSFX
+AudioServer.add_bus_effect(AudioServer.get_bus_index("Music"), lowpass)
+
+# Muffle the music as the player's health drops.
+lowpass.slider_1_cutoff_hz = lerpf(400.0, 18000.0, health / max_health)
+```
+
+## Who it's for
+
+- **Game audio designers** who already build sounds in REAPER and want the
+  same effects reacting to gameplay in Godot, without porting DSP to C++.
+- **DSP tinkerers** who want a fast scripting loop: edit a `.jsfx` file, save,
+  and hear the change in the running editor (hot reload).
+- **Godot developers** who need effects Godot doesn't ship (bit crushers,
+  waveshapers, resonant filters, custom dynamics) and would rather write 20
+  lines of EEL2 than a native plug-in.
+
+It is not a REAPER host: there's no JSFX graphics (`@gfx`), MIDI routing or
+file browser. See [Limitations](#limitations).
+
+## Features
+
+- **`AudioEffectJSFX` resource.** Put it on any bus like a built-in effect, in
+  the inspector or from code. `.jsfx` files load directly as resources
+  (`load("res://foo.jsfx")`).
+- **Sliders become properties.** `slider1:gain_db=0<-60,12,0.1>Gain (dB)`
+  becomes `slider_1_gain_db`, a `float` with a range hint. Enum sliders
+  (`{Sine,Triangle,Square}`) become dropdowns, `:log` sliders get an
+  exponential editor curve, and every slider has revert-to-default. Values
+  save into `.tres`/`.tscn` files and animate with `Tween` and
+  `AnimationPlayer`.
+- **Real EEL2.** The vendored Cockos WDL engine with the x64 JIT on desktop and
+  the portable interpreter on Web, ARM and iOS. Supported: `@init`, `@slider`,
+  `@block`, `@sample`, user functions, the 8M-slot memory model, `import` of
+  `.jsfx-inc` libraries, and the JSFX host API: `slider()`, `spl()`, `fft`/
+  `ifft`/`fft_real`/`convolve_c`, `time_precise()`, `srate`, `tempo`,
+  `beat_position`, `num_ch` and more.
+- **Hot reload.** Save a `.jsfx` file and the editor recompiles it within a
+  quarter second, swapping the running effect and keeping your slider
+  values. A script that fails to compile logs the EEL2 error with
+  its line number and the previous version keeps playing. `reload_script()` does
+  the same at runtime.
+- **Real-time safe.** The audio thread never locks, allocates, parses or
+  compiles. Parameter changes travel through a lock-free queue, and hot reload
+  is an atomic pointer swap with deferred reclamation.
+- **Lo-fi modes for cheap voices.** `downsample_factor` (1–8) runs the script
+  at a fraction of the mix rate for a proportional CPU saving.
+- **Web export.** Works in both single-threaded and SharedArrayBuffer
+  (threaded) Web exports.
+
+## Install
+
+1. Download `jsfx_for_godot-<version>.zip` from
+   [Releases](https://github.com/ayavaron/jsfx-for-godot/releases).
+2. Unzip it into your project root, so you have
+   `res://addons/jsfx_for_godot/jsfx_for_godot.gdextension`.
+3. Restart the editor. `AudioEffectJSFX` now appears in the Audio bus
+   "Add Effect" menu.
+
+Prebuilt binaries: **Windows x86-64** and **Web** (single-threaded and
+threaded). Linux and macOS build from source with the same CMake project (see
+[Building](#building-from-source)). Those builds are wired up but haven't been
+tested yet.
+
+Requires Godot **4.3 or newer**. Tested on Godot 4.7.2.
+
+## Usage
+
+### In the editor
+
+Open the Audio panel, choose **Add Effect → AudioEffectJSFX** on a bus, and
+pick a `.jsfx` file for `script_path`. The slider properties appear under it.
+
+### From GDScript
+
+```gdscript
+var fx := AudioEffectJSFX.new()
+fx.script_path = "res://effects/tremolo.jsfx"
+AudioServer.add_bus_effect(AudioServer.get_bus_index("SFX"), fx)
+
+fx.set("slider_2_depth", 0.8)                # by property name
+fx.set_slider(1, 7.5)                        # by JSFX slider number
+create_tween().tween_property(fx, "slider_1_rate_hz", 12.0, 2.0)
+
+fx.downsample_factor = 2                     # half the CPU, lower fidelity
+fx.reload_script()                           # recompile after editing the file
+```
+
+Property names are `slider_<N>_<description>`, where the description is
+lowercased with spaces and punctuation turned into `_`. `Cutoff (Hz)` becomes
+`slider_1_cutoff_hz`. Check the inspector or `get_property_list()` if unsure.
+
+The [demo project](demo/) contains three example effects. `gain.jsfx` is the
+minimal case. `effects/lowpass.jsfx` is a resonant filter with named and log
+sliders. `effects/tremolo.jsfx` uses an enum slider and imports a shared
+`lib/lfo.jsfx-inc`.
+
+### Using REAPER's effects
+
+Copy a `.jsfx` file (and any `.jsfx-inc` files it imports) into your project.
+Imports resolve next to the importing file first, then from `res://`. Check
+the license of each effect before shipping it in a game: REAPER's stock and
+community JSFX have various licenses, and many are GPL/LGPL.
+
+## JSFX compatibility
+
+All 263 effects in a stock REAPER install (`InstallData/Effects`, including
+the bundled community packs) went through the engine headlessly with 2 seconds
+of noise each.
+
+| Result | Effects |
+|---|---|
+| Load and run, finite output, no crashes | **234 (89%)** |
+| Need `file_open` (load samples or impulse responses from disk) | 10 |
+| Use the `<? ?>` EEL preprocessor | 9 |
+| Need EEL2 string functions (`sprintf`, `strcpy`, `strlen`) | 6 |
+| Need `mdct`/`imdct` | 4 |
+
+Most of the 234 are audio effects, which work fully. MIDI effects also
+compile, but their MIDI calls are no-ops, since Godot buses carry no MIDI.
+
+Supported beyond the basics: named sliders (`slider1:name=0<...>`), up to 256
+sliders, `:log`/`:sqr` slider shapes, hidden sliders (`-description`), file
+sliders (exposed as an index), enum labels, repeated sections, sloppy headers
+that REAPER tolerates, and `import`.
+
+## Performance impact
+
+Each JSFX instance adds three costs: CPU on Godot's audio thread, memory, and
+a one-time compile on the main thread. Everything below was measured on an
+Intel i7-11700KF with `tools/jsfx_bench.cpp` (engine alone) and
+`demo/tests/audio_probe.gd` (inside Godot 4.7.2 with a real audio driver).
+Run them on your own hardware to compare.
+
+### CPU (audio thread)
+
+Per effect instance at 48 kHz stereo, 512-frame blocks, x64 JIT, across the
+234 working REAPER effects:
+
+| | Time per 512-frame block | Share of one CPU core |
+|---|---|---|
+| Median effect | 21 µs | **0.20%** |
+| 90th percentile | 52 µs | 0.49% |
+| 99th percentile | 509 µs | 4.8% |
+| Heaviest (multiband correlation meter) | 775 µs | 7.3% |
+
+Typical game effects sit at the low end. The demo `gain.jsfx` uses 0.09% of a
+core, `lowpass.jsfx` 0.17% and `tremolo.jsfx` 0.19%. Godot mixes on its own
+audio thread, so this cost doesn't come out of your frame time unless the
+machine is CPU-bound. A typical effect leaves room for hundreds of instances.
+The Godot probe runs 17 JSFX buses at once and keeps up in real time.
+
+**Interpreter builds** (Web, ARM, iOS, universal macOS) run EEL2 without the
+JIT. That costs about 1.3–4× the CPU per effect: `lowpass.jsfx` goes from
+0.17% to 0.56% natively, and the heaviest spectral effects reach about 4×.
+Browsers add WebAssembly overhead on top. Budget fewer, simpler effects for
+Web exports.
+
+**Lo-fi mode:** `downsample_factor = 2` halves the cost and `4` quarters it.
+For example, lowpass drops from 18.0 µs to 9.9 µs and then 5.0 µs. The script
+sees the reduced `srate`, so filters and delays keep their tuning, but
+everything above the reduced Nyquist frequency is lost (zero-order hold). It
+works well for background voices and radios.
+
+`force_mono` makes the output mono (left channel into both outputs). It does
+**not** reduce CPU, because a stereo script still runs all its per-channel
+code.
+
+### Memory
+
+| | Per instance |
+|---|---|
+| RAM actually used (resident) | median **0.24 MB**, 90th percentile 0.31 MB, max 6.2 MB |
+| Virtual address space reserved | 64 MB |
+
+Every JSFX gets EEL2's full 8M-slot memory, as in REAPER. It is reserved as
+one virtual-memory region whose pages the OS supplies only when a script
+touches them, so a filter costs well under a megabyte. On Windows the 64 MB
+counts toward the system commit limit (pagefile-backed) but not toward RAM in
+use. **Web builds** have no lazily backed pages, so each instance takes its
+full 64 MB from the WebAssembly heap. Keep Web projects to a handful of
+instances.
+
+The first touch of each 4 KB memory page costs one page fault (around a
+microsecond) on the audio thread. Stock EEL2, by comparison, allocates 512 KB
+blocks with `calloc` on the audio thread the first time a script touches
+them.
+
+### Load time (main thread)
+
+Parsing and compiling a script takes a median of **2.3 ms** (max 7.4 ms
+across the REAPER corpus). This happens when `script_path` is set or a `.jsfx`
+resource loads, and again for each extra bus instance or hot reload. In Godot,
+creating a lowpass effect and adding it to a bus took about 1 ms. Create
+effects during loading screens rather than mid-gameplay if you need perfectly
+flat frame times.
+
+### Binary size
+
+The Windows release DLL is 631 KB with the C++ runtime linked statically, so
+players don't need the VC++ redistributable. The Web side module is about
+7 MB.
+
+## Limitations
+
+- No `@gfx` (JSFX UI) or `@serialize`. Godot's inspector and resource
+  serialization replace them.
+- No EEL2 strings, `file_*` functions, `<? ?>` preprocessor or `mdct`. Effects
+  that need them fail to compile and pass audio through unchanged, with the
+  error logged.
+- No MIDI. `midirecv` always returns 0 and `midisend` is dropped.
+- Stereo only (`spl0`/`spl1`). `num_ch` is 2.
+- `tempo` defaults to 120 BPM and `play_state` to "playing", with
+  `beat_position`/`play_position` advancing in real time. Godot has no
+  transport.
+- Imported files contribute their `@init` code (function libraries).
+  `@sample`/`@block` code inside an import is ignored with a warning.
+- Linux and macOS builds are not yet tested.
+
+## Building from source
+
+Requirements: CMake 3.24+, a C++20 compiler (MSVC 2022, GCC 13+, Clang 16+),
+and network access on first configure (Catch2 and godot-cpp are fetched).
+Non-MSVC x86-64 builds also need NASM for the EEL2 JIT. Without it they fall
+back to the interpreter.
+
+```powershell
+# Engine + unit tests (no Godot needed)
+cmake --preset windows-release
+cmake --build --preset windows-release
+ctest --preset windows-release
+
+# GDExtension (from a VS Developer PowerShell; Ninja)
+cmake --preset windows-godot-release
+cmake --build --preset windows-godot-release   # -> demo/bin/windows-release/
+cmake --preset windows-godot-debug
+cmake --build --preset windows-godot-debug     # editor builds load this one
+
+# Web (Emscripten 3.1.64, after emsdk_env)
+cmake --preset web-godot-release
+cmake --build --preset web-godot-release
+cmake --preset web-godot-release-threads
+cmake --build --preset web-godot-release-threads
+
+# Package the addon zip from whatever is built
+python tools/package_release.py 0.1.0
+```
+
+Linux/macOS: `cmake -S . -B build/godot -G Ninja -DCMAKE_BUILD_TYPE=Release
+-DJSFX_BUILD_GODOT=ON` followed by `cmake --build build/godot`. Pass
+`-DJSFX_EEL_JIT=OFF` to force the interpreter anywhere.
+
+## Testing
+
+| Suite | What it covers | Command |
+|---|---|---|
+| Catch2 (26 cases) | Parser leniency, imports, host functions, FFT, gain accuracy (RMS within 1e-6), memory bounds, denormal flushing, lock-free queue under contention, lo-fi modes | `ctest --preset windows-release` |
+| Smoke | Registration, loader, properties, serialization, hot reload, teardown | `godot --headless --path demo --script res://tests/extension_smoke.gd` |
+| GUT (8 tests) | Property hints and serialization, imports, threaded loading, Tween automation, parameter-burst stress | `tools/fetch_gut.ps1`, then `godot --headless --path demo -s addons/gut/gut_cmdln.gd -gdir=res://tests/unit -gexit` |
+| Audio probe | Real audio: output accuracy, 400+ hot reloads while playing, downsampled `srate`, 17 live instances | `godot --headless --audio-driver WASAPI --path demo --script res://tests/audio_probe.gd` |
+| Browser | Web exports, both threading modes, in Chrome | `tools/serve_web.py` + `tools/browser_smoke.py` |
+| Corpus bench | Every `.jsfx` you point it at: compatibility, CPU, memory | `jsfx_bench --import-dir <Effects> <files...>` |
+
+Import the demo once before running the Godot suites:
+`godot --headless --path demo --editor --quit-after 300`. Use
+`--quit-after` rather than `--quit`: Godot 4.7 can crash if it quits while
+still generating docs for a newly discovered extension.
+
+## How it works
+
+```
+ main thread                                   audio thread
+ ───────────                                   ────────────
+ .jsfx ─► JsfxDocument::parse  (sections, sliders, imports)
+        ─► Eel2Context::create (compile, map 64 MB VM, run @init)
+        ─► JsfxProcessor ──── atomic pointer ───► AudioEffectJSFXInstance::_process
+ property set ─► lock-free MPSC queue ──────────►   drain queue → @slider
+ hot reload  ─► new processor, atomic swap ─────►   @block, @sample per frame
+               (old one freed once the audio thread has left it)
+```
+
+`src/core` and `include/jsfx` hold a Godot-free C++20 library: parser, EEL2
+wrapper, processor and queue. `src/godot` holds the GDExtension bridge.
+`third_party/wdl` is an unmodified subset of Cockos WDL.
+
+## License and credits
+
+MIT. See [LICENSE](LICENSE). The bundled EEL2 engine is
+[Cockos WDL](https://github.com/justinfrankel/WDL) under its zlib-style
+license ([details](third_party/wdl/VENDORED.md)).
+
+JSFX, EEL2 and REAPER are by [Cockos](https://www.cockos.com/). This project
+is unofficial and not affiliated with or endorsed by Cockos.

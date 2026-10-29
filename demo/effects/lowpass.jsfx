@@ -1,0 +1,27 @@
+desc: Resonant Lowpass (JSFX for Godot demo)
+// RBJ cookbook biquad. Public domain / MIT, part of the JSFX for Godot demo.
+slider1:cutoff=2000<20,20000,1:log>Cutoff (Hz)
+slider2:q=0.707<0.1,10,0.01>Resonance (Q)
+slider3:mix=1<0,1,0.01>Mix
+
+@init
+x1l = x2l = y1l = y2l = 0;
+x1r = x2r = y1r = y2r = 0;
+
+@slider
+w0 = 2 * $pi * min(cutoff, srate * 0.49) / srate;
+alpha = sin(w0) / (2 * q);
+a0 = 1 + alpha;
+b0 = (1 - cos(w0)) / 2 / a0;
+b1 = (1 - cos(w0)) / a0;
+b2 = b0;
+a1 = -2 * cos(w0) / a0;
+a2 = (1 - alpha) / a0;
+
+@sample
+yl = b0*spl0 + b1*x1l + b2*x2l - a1*y1l - a2*y2l;
+x2l = x1l; x1l = spl0; y2l = y1l; y1l = yl;
+yr = b0*spl1 + b1*x1r + b2*x2r - a1*y1r - a2*y2r;
+x2r = x1r; x1r = spl1; y2r = y1r; y1r = yr;
+spl0 = spl0 + (yl - spl0) * mix;
+spl1 = spl1 + (yr - spl1) * mix;

@@ -1,0 +1,17 @@
+[configuration]
+
+entry_symbol = "jsfx_for_godot_init"
+compatibility_minimum = "4.3"
+
+[libraries]
+
+windows.debug.x86_64 = "res://bin/windows-debug/jsfx_for_godot.dll"
+windows.release.x86_64 = "res://bin/windows-release/jsfx_for_godot.dll"
+linux.debug.x86_64 = "res://bin/linux-debug/libjsfx_for_godot.so"
+linux.release.x86_64 = "res://bin/linux-release/libjsfx_for_godot.so"
+macos.debug = "res://bin/macos-debug/libjsfx_for_godot.dylib"
+macos.release = "res://bin/macos-release/libjsfx_for_godot.dylib"
+web.debug.wasm32 = "res://bin/web-debug/jsfx_for_godot.wasm"
+web.release.wasm32 = "res://bin/web-release/jsfx_for_godot.wasm"
+web.debug.threads.wasm32 = "res://bin/web-debug-threads/jsfx_for_godot.wasm"
+web.release.threads.wasm32 = "res://bin/web-release-threads/jsfx_for_godot.wasm"

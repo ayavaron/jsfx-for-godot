@@ -1,0 +1,17 @@
+desc: Tremolo (JSFX for Godot demo)
+// Shows `import`, enum sliders and named slider variables. MIT.
+import lib/lfo.jsfx-inc
+
+slider1:rate=5<0.1,20,0.01:log>Rate (Hz)
+slider2:depth=0.5<0,1,0.01>Depth
+slider3:shape=0<0,2,1{Sine,Triangle,Square}>Shape
+
+@init
+phase = 0;
+
+@sample
+gain = 1 - depth * lfo_shape(phase, shape);
+spl0 *= gain;
+spl1 *= gain;
+phase += rate / srate;
+phase >= 1 ? phase -= 1;
