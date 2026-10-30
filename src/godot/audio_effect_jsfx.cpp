@@ -24,6 +24,7 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include "audio_effect_jsfx_instance.h"
+#include "jsfx_runtime.h"
 #include "jsfx/processor.h"
 #include "jsfx/ram_pool.h"
 
@@ -179,7 +180,10 @@ AudioEffectJSFX::AudioEffectJSFX() {
   slider_set_.fill(false);
 }
 
-AudioEffectJSFX::~AudioEffectJSFX() = default;
+AudioEffectJSFX::~AudioEffectJSFX() {
+  // Instrument playbacks hold this resource weakly and check it still exists
+  // before unregistering; nothing else to do here.
+}
 
 void AudioEffectJSFX::_bind_methods() {
   ClassDB::bind_method(D_METHOD("set_script_path", "path"),
@@ -218,6 +222,25 @@ void AudioEffectJSFX::_bind_methods() {
                        &AudioEffectJSFX::get_slider);
   ClassDB::bind_method(D_METHOD("get_processed_frames"),
                        &AudioEffectJSFX::get_processed_frames);
+
+  ClassDB::bind_method(D_METHOD("send_midi", "status", "data1", "data2"),
+                       &AudioEffectJSFX::send_midi);
+  ClassDB::bind_method(D_METHOD("note_on", "note", "velocity", "channel"),
+                       &AudioEffectJSFX::note_on, DEFVAL(100), DEFVAL(0));
+  ClassDB::bind_method(D_METHOD("note_off", "note", "channel"),
+                       &AudioEffectJSFX::note_off, DEFVAL(0));
+  ClassDB::bind_method(
+      D_METHOD("control_change", "controller", "value", "channel"),
+      &AudioEffectJSFX::control_change, DEFVAL(0));
+  ClassDB::bind_method(D_METHOD("pitch_bend", "amount", "channel"),
+                       &AudioEffectJSFX::pitch_bend, DEFVAL(0));
+  ClassDB::bind_method(D_METHOD("all_notes_off", "channel"),
+                       &AudioEffectJSFX::all_notes_off, DEFVAL(-1));
+  ADD_SIGNAL(MethodInfo("midi_sent", PropertyInfo(Variant::INT, "status"),
+                        PropertyInfo(Variant::INT, "data1"),
+                        PropertyInfo(Variant::INT, "data2")));
+  ClassDB::bind_method(D_METHOD("_poll_midi_output"),
+                       &AudioEffectJSFX::_poll_midi_output);
   ClassDB::bind_method(D_METHOD("reload_script"),
                        &AudioEffectJSFX::reload_script);
   ClassDB::bind_static_method("AudioEffectJSFX",
@@ -313,8 +336,8 @@ void AudioEffectJSFX::set_script_path(const String& path) {
   // same safe swap path used by hot reload.
   bool has_instances = false;
   {
-    std::lock_guard<std::mutex> lock(instances_mutex_);
-    has_instances = !instances_.empty();
+    std::lock_guard<std::mutex> lock(owners_mutex_);
+    has_instances = !owners_.empty();
   }
   if (has_instances && has_document_ && prepared_processor_ != nullptr) {
     reload_script();
@@ -351,6 +374,7 @@ void AudioEffectJSFX::load_script_now(bool preserve_values, bool notify) {
       script_path_.is_empty() ? 0
                               : FileAccess::get_modified_time(script_path_);
 
+  update_sends_midi();
   if (notify) {
     emit_changed();
     notify_property_list_changed();
@@ -382,18 +406,18 @@ bool AudioEffectJSFX::reload_script() {
   }
 
   struct Replacement {
-    AudioEffectJSFXInstance* instance = nullptr;
+    JsfxRuntimeOwner* owner = nullptr;
     std::unique_ptr<jsfx::JsfxProcessor> processor;
   };
 
   std::vector<Replacement> replacements;
   {
-    std::lock_guard<std::mutex> lock(instances_mutex_);
-    replacements.reserve(instances_.size());
+    std::lock_guard<std::mutex> lock(owners_mutex_);
+    replacements.reserve(owners_.size());
 
     jsfx::JsfxEnvironment environment;
     environment.sample_rate = loaded.sample_rate;
-    for (AudioEffectJSFXInstance* instance : instances_) {
+    for (JsfxRuntimeOwner* owner : owners_) {
       auto compiled =
           jsfx::JsfxProcessor::create(loaded.document, environment);
       if (!compiled.ok()) {
@@ -402,8 +426,7 @@ bool AudioEffectJSFX::reload_script() {
       }
       apply_slider_values(*compiled.value(), loaded.document, loaded.values,
                           loaded.set);
-      replacements.push_back(
-          {instance, std::move(compiled.value())});
+      replacements.push_back({owner, std::move(compiled.value())});
     }
 
     // All replacements compiled; commit the resource state and swap. Keep the
@@ -413,7 +436,7 @@ bool AudioEffectJSFX::reload_script() {
     has_document_ = true;
     slider_values_ = loaded.values;
     slider_set_ = loaded.set;
-    if (instances_.empty()) {
+    if (owners_.empty()) {
       prepared_processor_ = std::move(loaded.prepared);
       prepared_sample_rate_ = loaded.sample_rate;
     } else {
@@ -422,10 +445,14 @@ bool AudioEffectJSFX::reload_script() {
     }
 
     for (Replacement& replacement : replacements) {
-      replacement.instance->swap_processor(std::move(replacement.processor));
+      if (replacement.owner->jsfx_runtime().swap_processor(
+              std::move(replacement.processor))) {
+        replacement.owner->schedule_reclaim();
+      }
     }
   }
 
+  update_sends_midi();
   emit_changed();
   notify_property_list_changed();
   ensure_file_watch();
@@ -484,15 +511,15 @@ void AudioEffectJSFX::set_downsample_factor(int factor) {
   // on the main thread, so rebuild them through the hot-reload swap.
   bool has_instances = false;
   {
-    std::lock_guard<std::mutex> lock(instances_mutex_);
-    has_instances = !instances_.empty();
+    std::lock_guard<std::mutex> lock(owners_mutex_);
+    has_instances = !owners_.empty();
   }
   if (has_instances && has_document_ && on_main_thread()) reload_script();
 
   {
-    std::lock_guard<std::mutex> lock(instances_mutex_);
-    for (AudioEffectJSFXInstance* instance : instances_) {
-      instance->set_downsample_factor(factor);
+    std::lock_guard<std::mutex> lock(owners_mutex_);
+    for (JsfxRuntimeOwner* owner : owners_) {
+      owner->jsfx_runtime().set_downsample_factor(factor);
     }
   }
   emit_changed();
@@ -507,9 +534,9 @@ void AudioEffectJSFX::set_force_mono(bool enabled) {
   force_mono_ = enabled;
 
   {
-    std::lock_guard<std::mutex> lock(instances_mutex_);
-    for (AudioEffectJSFXInstance* instance : instances_) {
-      instance->set_force_mono(enabled);
+    std::lock_guard<std::mutex> lock(owners_mutex_);
+    for (JsfxRuntimeOwner* owner : owners_) {
+      owner->jsfx_runtime().set_force_mono(enabled);
     }
   }
   emit_changed();
@@ -533,9 +560,9 @@ bool AudioEffectJSFX::set_slider(int index, double value) {
 
   bool pushed = true;
   {
-    std::lock_guard<std::mutex> lock(instances_mutex_);
-    for (AudioEffectJSFXInstance* instance : instances_) {
-      pushed = instance->push_slider(index, value) && pushed;
+    std::lock_guard<std::mutex> lock(owners_mutex_);
+    for (JsfxRuntimeOwner* owner : owners_) {
+      pushed = owner->jsfx_runtime().push_slider(index, value) && pushed;
     }
   }
   return pushed;
@@ -553,11 +580,116 @@ double AudioEffectJSFX::get_slider(int index) const {
 
 int64_t AudioEffectJSFX::get_processed_frames() const {
   int64_t total = 0;
-  std::lock_guard<std::mutex> lock(instances_mutex_);
-  for (const AudioEffectJSFXInstance* instance : instances_) {
-    total += static_cast<int64_t>(instance->processed_frames());
+  std::lock_guard<std::mutex> lock(owners_mutex_);
+  for (JsfxRuntimeOwner* owner : owners_) {
+    total += static_cast<int64_t>(owner->jsfx_runtime().processed_frames());
   }
   return total;
+}
+
+bool AudioEffectJSFX::send_midi(int status, int data1, int data2) {
+  if (status < 0x80 || status > 0xFF) return false;
+  const jsfx::MidiMessage message{
+      0, static_cast<std::uint8_t>(status),
+      static_cast<std::uint8_t>(std::clamp(data1, 0, 127)),
+      static_cast<std::uint8_t>(std::clamp(data2, 0, 127))};
+
+  std::lock_guard<std::mutex> lock(owners_mutex_);
+  bool delivered = false;
+  bool all_queued = true;
+  for (JsfxRuntimeOwner* owner : owners_) {
+    if (!owner->jsfx_runtime().has_processor()) continue;
+    delivered = true;
+    all_queued = owner->jsfx_runtime().push_midi(message) && all_queued;
+  }
+  return delivered && all_queued;
+}
+
+namespace {
+
+int midi_channel(int channel) { return std::clamp(channel, 0, 15); }
+
+}  // namespace
+
+bool AudioEffectJSFX::note_on(int note, int velocity, int channel) {
+  // Velocity 0 means note-off in MIDI; keep note_on audible.
+  return send_midi(0x90 | midi_channel(channel), note,
+                   std::clamp(velocity, 1, 127));
+}
+
+bool AudioEffectJSFX::note_off(int note, int channel) {
+  return send_midi(0x80 | midi_channel(channel), note, 0);
+}
+
+bool AudioEffectJSFX::control_change(int controller, int value, int channel) {
+  return send_midi(0xB0 | midi_channel(channel), controller, value);
+}
+
+bool AudioEffectJSFX::pitch_bend(double amount, int channel) {
+  // -1..1 maps onto the 14-bit range with 8192 as center.
+  const int value = std::clamp(
+      static_cast<int>(std::lround(8192.0 + std::clamp(amount, -1.0, 1.0) * 8192.0)),
+      0, 16383);
+  return send_midi(0xE0 | midi_channel(channel), value & 0x7F, value >> 7);
+}
+
+bool AudioEffectJSFX::all_notes_off(int channel) {
+  if (channel >= 0) return control_change(123, 0, channel);
+  bool delivered = true;
+  for (int c = 0; c < 16; ++c) delivered = control_change(123, 0, c) && delivered;
+  return delivered;
+}
+
+void AudioEffectJSFX::update_sends_midi() {
+  // midi_sent costs a per-frame poll, so only scripts that call midisend get
+  // one.
+  sends_midi_ = false;
+  if (!has_document_) return;
+  for (jsfx::JsfxSectionKind kind :
+       {jsfx::JsfxSectionKind::Init, jsfx::JsfxSectionKind::Slider,
+        jsfx::JsfxSectionKind::Block, jsfx::JsfxSectionKind::Sample}) {
+    if (document_.section(kind).code.find("midisend") != std::string::npos) {
+      sends_midi_ = true;
+    }
+  }
+  for (const jsfx::JsfxImport& imported : document_.imports()) {
+    if (imported.init_code.find("midisend") != std::string::npos) sends_midi_ = true;
+  }
+  bool has_owners = false;
+  {
+    std::lock_guard<std::mutex> lock(owners_mutex_);
+    has_owners = !owners_.empty();
+  }
+  if (has_owners) ensure_midi_output_poll();
+}
+
+void AudioEffectJSFX::ensure_midi_output_poll() {
+  if (midi_poll_connected_ || !sends_midi_ || !on_main_thread()) return;
+  Engine* engine = Engine::get_singleton();
+  SceneTree* tree =
+      engine != nullptr ? Object::cast_to<SceneTree>(engine->get_main_loop())
+                        : nullptr;
+  if (tree == nullptr) return;
+  if (tree->connect("process_frame", Callable(this, "_poll_midi_output")) == OK) {
+    midi_poll_connected_ = true;
+  }
+}
+
+void AudioEffectJSFX::_poll_midi_output() {
+  // Collect first: a midi_sent handler may call back into this resource.
+  std::vector<jsfx::MidiMessage> sent;
+  {
+    std::lock_guard<std::mutex> lock(owners_mutex_);
+    for (JsfxRuntimeOwner* owner : owners_) {
+      owner->jsfx_runtime().drain_midi_output(
+          [&sent](const jsfx::MidiMessage& message) { sent.push_back(message); });
+    }
+  }
+  for (const jsfx::MidiMessage& message : sent) {
+    emit_signal("midi_sent", static_cast<int64_t>(message.status),
+                static_cast<int64_t>(message.data1),
+                static_cast<int64_t>(message.data2));
+  }
 }
 
 Ref<AudioEffectInstance> AudioEffectJSFX::_instantiate() {
@@ -573,11 +705,17 @@ Ref<AudioEffectInstance> AudioEffectJSFX::_instantiate() {
         Ref<AudioEffectJSFX>(), nullptr, downsample_factor_, force_mono_)));
   }
 
-  ensure_script_loaded();
-  if (!has_document_) {
-    return Ref<AudioEffectInstance>(memnew(AudioEffectJSFXInstance(
-        self, nullptr, downsample_factor_, force_mono_)));
+  return Ref<AudioEffectInstance>(memnew(AudioEffectJSFXInstance(
+      self, create_processor(), downsample_factor_, force_mono_)));
+}
+
+std::unique_ptr<jsfx::JsfxProcessor> AudioEffectJSFX::create_processor() {
+  if (!on_main_thread()) {
+    ERR_PRINT("JSFX: scripts are compiled on the main thread only");
+    return nullptr;
   }
+  ensure_script_loaded();
+  if (!has_document_) return nullptr;
 
   jsfx::JsfxEnvironment environment;
   const double mix_rate = effective_sample_rate();
@@ -594,37 +732,29 @@ Ref<AudioEffectInstance> AudioEffectJSFX::_instantiate() {
     auto compiled = jsfx::JsfxProcessor::create(document_, environment);
     if (!compiled.ok()) {
       report_script_error("compile error", script_path_, compiled.error());
-      return Ref<AudioEffectInstance>(memnew(AudioEffectJSFXInstance(
-          self, nullptr, downsample_factor_, force_mono_)));
+      return nullptr;
     }
     processor = std::move(compiled.value());
-    apply_slider_values(*processor, document_, slider_values_, slider_set_);
   }
 
-  AudioEffectJSFXInstance* raw_instance = memnew(AudioEffectJSFXInstance(
-      self, std::move(processor), downsample_factor_, force_mono_));
+  // The resource may have been changed since the prepared processor was
+  // built; the first processing block must see the current slider values.
+  apply_slider_values(*processor, document_, slider_values_, slider_set_);
   ensure_ram_pool_pump();
-  Ref<AudioEffectInstance> instance(raw_instance);
+  return processor;
+}
 
-  // A resource may have been modified before it was added to a bus; make sure
-  // the first processing block sees the current slider values.
-  for (int index = 1; index <= jsfx::JsfxDocument::kMaxSliders; ++index) {
-    const auto slot = static_cast<std::size_t>(index - 1);
-    if (slider_set_[slot]) raw_instance->push_slider(index, slider_values_[slot]);
+void AudioEffectJSFX::register_owner(JsfxRuntimeOwner* owner) {
+  {
+    std::lock_guard<std::mutex> lock(owners_mutex_);
+    owners_.push_back(owner);
   }
-
-  return instance;
+  ensure_midi_output_poll();
 }
 
-void AudioEffectJSFX::register_instance(AudioEffectJSFXInstance* instance) {
-  std::lock_guard<std::mutex> lock(instances_mutex_);
-  instances_.push_back(instance);
-}
-
-void AudioEffectJSFX::unregister_instance(AudioEffectJSFXInstance* instance) {
-  std::lock_guard<std::mutex> lock(instances_mutex_);
-  instances_.erase(std::remove(instances_.begin(), instances_.end(), instance),
-                   instances_.end());
+void AudioEffectJSFX::unregister_owner(JsfxRuntimeOwner* owner) {
+  std::lock_guard<std::mutex> lock(owners_mutex_);
+  owners_.erase(std::remove(owners_.begin(), owners_.end(), owner), owners_.end());
 }
 
 bool AudioEffectJSFX::_set(const StringName& p_name, const Variant& p_value) {

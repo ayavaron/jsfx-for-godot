@@ -138,7 +138,59 @@ spl0 = spl1 = srate / 100000;
 	_check(absf(rms - _mix_rate / 100000.0) < 0.001,
 		"downsample_factor 1 restores srate %.0f" % (rms * 100000.0))
 
-	# 4. Instantiation cost and many instances ------------------------------
+	# 4. Instruments: AudioStreamJSFX plays notes; midisend reaches GDScript --
+	var synth_bus := AudioServer.bus_count
+	AudioServer.add_bus(synth_bus)
+	AudioServer.set_bus_name(synth_bus, "SynthProbe")
+	var synth_capture := AudioEffectCapture.new()
+	synth_capture.buffer_length = 2.0
+	AudioServer.add_bus_effect(synth_bus, synth_capture)
+
+	var synth := AudioStreamJSFX.new()
+	synth.jsfx = load("res://instruments/simple_synth.jsfx")
+	var synth_player := AudioStreamPlayer.new()
+	synth_player.stream = synth
+	synth_player.bus = "SynthProbe"
+	root.add_child(synth_player)
+	synth_player.play()
+	await _wait(0.2)
+	var silent := await _capture_rms(synth_capture, 0.3)
+	synth.jsfx.note_on(57, 110)
+	synth.jsfx.note_on(64, 110)
+	await _wait(0.1)
+	var playing := await _capture_rms(synth_capture, 0.4)
+	synth.jsfx.all_notes_off()
+	await _wait(1.5)
+	var released := await _capture_rms(synth_capture, 0.3)
+	# Release is a 400 ms time constant, so after 1.5 s it is down about 30 dB.
+	_check(silent < 0.0001 and playing > 0.02 and released < playing / 20.0,
+		"synth: silent %.5f, notes %.4f, after release %.5f" % [silent, playing, released])
+
+	var echo_file := FileAccess.open("user://audio_probe_echo.jsfx", FileAccess.WRITE)
+	echo_file.store_string("@block
+while (midirecv(o, a, b, c)) ( midisend(o, a, b + 12, c); );
+@sample
+spl0 = spl1 = 0;
+")
+	echo_file.close()
+	var echo := AudioStreamJSFX.new()
+	echo.jsfx = AudioEffectJSFX.new()
+	echo.jsfx.script_path = "user://audio_probe_echo.jsfx"
+	var received: Array = []
+	echo.jsfx.midi_sent.connect(func(status: int, d1: int, d2: int) -> void:
+		received.append([status, d1, d2]))
+	var echo_player := AudioStreamPlayer.new()
+	echo_player.stream = echo
+	root.add_child(echo_player)
+	echo_player.play()
+	await _wait(0.1)
+	echo.jsfx.note_on(60, 100)
+	await _wait(0.3)
+	_check(received == [[0x90, 72, 100]], "midi_sent echoes a transposed note: %s" % [received])
+	synth_player.stop()
+	echo_player.stop()
+
+	# 5. Instantiation cost and many instances ------------------------------
 	var instantiate_ms: Array[float] = []
 	var buses: Array[int] = []
 	for i in 16:

@@ -1,0 +1,89 @@
+desc: Simple Synth (JSFX for Godot demo)
+// 8-voice polyphonic sawtooth synth with an ADSR envelope and a 12 dB lowpass.
+// MIDI: note on/off, mod wheel (CC1) opens the filter, pitch bend +-2
+// semitones, CC120/123 silence everything. MIT, part of the JSFX for Godot demo.
+slider1:attack_ms=5<1,2000,1:log>Attack (ms)
+slider2:decay_ms=300<1,5000,1:log>Decay (ms)
+slider3:sustain=0.6<0,1,0.01>Sustain
+slider4:release_ms=400<1,5000,1:log>Release (ms)
+slider5:cutoff=2500<40,18000,1:log>Cutoff (Hz)
+slider6:volume=0.5<0,1,0.01>Volume
+
+@init
+NV = 8;
+// Per-voice state in EEL2 memory: one array of NV slots each.
+vnote = 0; vinc = 16; vphase = 32; venv = 48; vstage = 64; vvel = 80; vage = 96;
+memset(0, 0, 112);
+// Stages: 0 idle, 1 attack, 2 decay/sustain, 3 release.
+bend = 1; mod = 0; clock = 0;
+lp1 = lp2 = 0;
+
+function note_inc(n) (440 * 2 ^ ((n - 69) / 12) / srate);
+
+@slider
+a_inc = 1 / (attack_ms * 0.001 * srate);
+d_coef = exp(-1 / (decay_ms * 0.001 * srate));
+r_coef = exp(-1 / (release_ms * 0.001 * srate));
+
+@block
+while (midirecv(ofs, m1, m2, m3)) (
+  status = m1 & 240;
+  status == 144 && m3 > 0 ? (
+    // Note on: take an idle voice, else steal the oldest.
+    v = 0; free = -1; oldest = 0;
+    loop(NV,
+      vstage[v] == 0 && free < 0 ? free = v;
+      vage[v] < vage[oldest] ? oldest = v;
+      v += 1;
+    );
+    free < 0 ? free = oldest;
+    vnote[free] = m2; vinc[free] = note_inc(m2); vvel[free] = m3 / 127;
+    vstage[free] = 1; vphase[free] = 0; vage[free] = clock += 1;
+  ) : status == 128 || status == 144 ? (
+    v = 0;
+    loop(NV, vnote[v] == m2 && vstage[v] > 0 ? vstage[v] = 3; v += 1);
+  ) : status == 176 ? (
+    m2 == 1 ? mod = m3 / 127;
+    m2 == 120 || m2 == 123 ? (v = 0; loop(NV, vstage[v] > 0 ? vstage[v] = 3; v += 1));
+  ) : status == 224 ? (
+    bend = 2 ^ (((m2 + m3 * 128) - 8192) / 8192 * 2 / 12);
+  );
+);
+fc = min(cutoff * (1 + mod * 7), srate * 0.45);
+k = 1 - exp(-2 * $pi * fc / srate);
+
+@sample
+out = 0;
+v = 0;
+loop(NV,
+  vstage[v] > 0 ? (
+    e = venv[v];
+    vstage[v] == 1 ? (
+      e += a_inc;
+      e >= 1 ? (e = 1; vstage[v] = 2);
+    ) : vstage[v] == 2 ? (
+      e = sustain + (e - sustain) * d_coef;
+    ) : (
+      e *= r_coef;
+      e < 0.0001 ? (e = 0; vstage[v] = 0);
+    );
+    venv[v] = e;
+
+    // PolyBLEP sawtooth.
+    p = vphase[v];
+    dt = vinc[v] * bend;
+    s = 2 * p - 1;
+    p < dt ? (t = p / dt; s -= t + t - t * t - 1) :
+    p > 1 - dt ? (t = (p - 1) / dt; s -= t * t + t + t + 1);
+    out += s * e * vvel[v];
+
+    p += dt;
+    p >= 1 ? p -= 1;
+    vphase[v] = p;
+  );
+  v += 1;
+);
+x = out * volume * 0.3;
+lp1 += k * (x - lp1);
+lp2 += k * (lp1 - lp2);
+spl0 = spl1 = lp2;

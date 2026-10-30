@@ -24,7 +24,7 @@ class JsfxProcessor;
 
 namespace jsfx_godot {
 
-class AudioEffectJSFXInstance;
+class JsfxRuntimeOwner;
 
 /// Disconnects the per-frame EEL2 memory-pool refill and frees the pool.
 void shutdown_ram_pool();
@@ -59,6 +59,16 @@ class AudioEffectJSFX : public godot::AudioEffect {
   /// Total audio frames processed by every live instance (diagnostics).
   int64_t get_processed_frames() const;
 
+  /// MIDI to every live instance (bus effects and instrument playbacks),
+  /// delivered to `midirecv` at the start of their next audio block. Return
+  /// false when nothing is running to receive it or a queue is full.
+  bool send_midi(int status, int data1, int data2);
+  bool note_on(int note, int velocity, int channel);
+  bool note_off(int note, int channel);
+  bool control_change(int controller, int value, int channel);
+  bool pitch_bend(double amount, int channel);
+  bool all_notes_off(int channel);
+
   /// Re-read and recompile `script_path` on the main thread, atomically swapping
   /// live instances to the new context. On failure the old script keeps playing.
   bool reload_script();
@@ -74,9 +84,15 @@ class AudioEffectJSFX : public godot::AudioEffect {
 
   godot::Ref<godot::AudioEffectInstance> _instantiate() override;
 
-  /// Internal instance bookkeeping; called by AudioEffectJSFXInstance.
-  void register_instance(AudioEffectJSFXInstance* instance);
-  void unregister_instance(AudioEffectJSFXInstance* instance);
+  /// Main thread: a processor for a new bus instance or instrument playback,
+  /// compiled with the current slider values. Null when the script is missing
+  /// or does not compile (the caller then passes audio through).
+  std::unique_ptr<jsfx::JsfxProcessor> create_processor();
+
+  /// Internal bookkeeping for AudioEffectJSFXInstance and
+  /// AudioStreamPlaybackJSFX: owners receive slider values, MIDI and reloads.
+  void register_owner(JsfxRuntimeOwner* owner);
+  void unregister_owner(JsfxRuntimeOwner* owner);
 
  protected:
   static void _bind_methods();
@@ -98,6 +114,9 @@ class AudioEffectJSFX : public godot::AudioEffect {
   double effective_sample_rate() const;
   void ensure_file_watch();
   void _poll_script_file();
+  void _poll_midi_output();
+  void ensure_midi_output_poll();
+  void update_sends_midi();
   const jsfx::JsfxSlider* find_slider_by_property(
       const godot::StringName& property) const;
 
@@ -136,8 +155,12 @@ class AudioEffectJSFX : public godot::AudioEffect {
   int poll_tick_ = 0;
   bool file_watch_connected_ = false;
 
-  mutable std::mutex instances_mutex_;
-  std::vector<AudioEffectJSFXInstance*> instances_;
+  /// True when the script calls midisend, so midi_sent needs polling.
+  bool sends_midi_ = false;
+  bool midi_poll_connected_ = false;
+
+  mutable std::mutex owners_mutex_;
+  std::vector<JsfxRuntimeOwner*> owners_;
 };
 
 }  // namespace jsfx_godot

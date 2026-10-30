@@ -5,6 +5,7 @@
 
 #include "jsfx/document.h"
 #include "jsfx/environment.h"
+#include "jsfx/midi.h"
 #include "jsfx/result.h"
 
 namespace jsfx {
@@ -43,6 +44,13 @@ class Eel2Context {
   void run_block(int frames);
   void run_sample();
   void run_slider();
+
+  /// MIDI for the next block: `push_midi_input` queues an event for
+  /// `midirecv`; `clear_midi` drops unread input and sent output.
+  bool push_midi_input(const MidiMessage& message);
+  int midi_output_count() const;
+  MidiMessage midi_output(int index) const;
+  void clear_midi();
 
   bool has_section(JsfxSectionKind kind) const;
 

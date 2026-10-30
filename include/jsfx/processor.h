@@ -1,12 +1,14 @@
 #pragma once
 
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 
 #include "jsfx/audio_frame.h"
 #include "jsfx/document.h"
 #include "jsfx/environment.h"
+#include "jsfx/midi.h"
 #include "jsfx/result.h"
 
 namespace jsfx {
@@ -58,6 +60,16 @@ class JsfxProcessor {
   void set_force_mono(bool enabled);
   bool force_mono() const;
 
+  /// Queue a MIDI message for `midirecv` in the next `process` call (all at
+  /// the given offset, in order). Returns false when the block's
+  /// `kMaxMidiEventsPerBlock` limit is reached. Call from the processing
+  /// thread.
+  bool add_midi_input(const MidiMessage& message);
+
+  /// Messages the script sent with `midisend` during the last `process` call.
+  /// Valid until the next call.
+  std::span<const MidiMessage> midi_output() const;
+
   /// Process `frame_count` stereo frames. May be called in place
   /// (`input == output`). No allocation, locking or file I/O.
   void process(const AudioFrame* input, AudioFrame* output, int frame_count);
@@ -65,6 +77,8 @@ class JsfxProcessor {
  private:
   struct Impl;
   explicit JsfxProcessor(std::unique_ptr<Impl> impl);
+  void process_block(const AudioFrame* input, AudioFrame* output,
+                     int frame_count);
 
   std::unique_ptr<Impl> impl_;
 };

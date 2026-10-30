@@ -311,6 +311,37 @@ void Eel2Context::run_slider() {
   }
 }
 
+bool Eel2Context::push_midi_input(const MidiMessage& message) {
+  if (impl_ == nullptr || impl_->host.midi_in_count >= JSFX_HOST_MAX_MIDI) {
+    return false;
+  }
+  JsfxMidiEvent& event = impl_->host.midi_in[impl_->host.midi_in_count++];
+  event.offset = message.offset;
+  event.status = message.status;
+  event.data1 = message.data1;
+  event.data2 = message.data2;
+  return true;
+}
+
+int Eel2Context::midi_output_count() const {
+  return impl_ != nullptr ? impl_->host.midi_out_count : 0;
+}
+
+MidiMessage Eel2Context::midi_output(int index) const {
+  if (impl_ == nullptr || index < 0 || index >= impl_->host.midi_out_count) {
+    return {};
+  }
+  const JsfxMidiEvent& event = impl_->host.midi_out[index];
+  return MidiMessage{event.offset, event.status, event.data1, event.data2};
+}
+
+void Eel2Context::clear_midi() {
+  if (impl_ == nullptr) return;
+  impl_->host.midi_in_count = 0;
+  impl_->host.midi_in_pos = 0;
+  impl_->host.midi_out_count = 0;
+}
+
 bool Eel2Context::has_section(JsfxSectionKind kind) const {
   if (impl_ == nullptr) return false;
   const auto index = static_cast<std::size_t>(kind);

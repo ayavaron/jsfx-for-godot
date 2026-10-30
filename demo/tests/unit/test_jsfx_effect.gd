@@ -191,3 +191,30 @@ func test_imports_resolve_relative_to_the_script() -> void:
 	assert_not_null(AudioServer.get_bus_effect_instance(0, index))
 	assert_true(effect.reload_script(), "tremolo should compile with its import")
 	AudioServer.remove_bus_effect(0, index)
+
+
+func test_instrument_stream_receives_midi_while_playing() -> void:
+	var stream := AudioStreamJSFX.new()
+	stream.jsfx = load("res://instruments/simple_synth.jsfx")
+	var keys: AudioEffectJSFX = stream.jsfx
+	assert_false(keys.note_on(60), "nothing is playing yet to receive MIDI")
+
+	var player := AudioStreamPlayer.new()
+	player.stream = stream
+	add_child_autofree(player)
+	player.play()
+	var playback := player.get_stream_playback()
+	assert_not_null(playback)
+	assert_eq(playback.get_class(), "AudioStreamPlaybackJSFX")
+
+	assert_true(keys.note_on(60, 100))
+	assert_true(keys.note_off(60))
+	assert_true(keys.control_change(1, 64))
+	assert_true(keys.pitch_bend(0.25))
+	assert_true(keys.all_notes_off())
+	assert_false(keys.send_midi(0x10, 0, 0), "status bytes start at 0x80")
+
+	# Instrument sliders are the wrapped effect's properties.
+	keys.set("slider_5_cutoff_hz", 800.0)
+	assert_almost_eq(keys.get_slider(5), 800.0, 1e-6)
+	player.stop()

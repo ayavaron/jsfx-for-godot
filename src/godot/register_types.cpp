@@ -11,6 +11,7 @@
 #include "audio_effect_jsfx.h"
 #include "audio_effect_jsfx_instance.h"
 #include "audio_effect_jsfx_loader.h"
+#include "audio_stream_jsfx.h"
 
 using namespace godot;
 
@@ -29,6 +30,9 @@ void initialize_jsfx_module(ModuleInitializationLevel level) {
   // The engine calls AudioEffectInstance virtuals; it is not user-instantiable.
   GDREGISTER_INTERNAL_CLASS(AudioEffectJSFXInstance);
   GDREGISTER_INTERNAL_CLASS(AudioEffectJSFXLoader);
+  GDREGISTER_CLASS(AudioStreamJSFX);
+  // Created by AudioStreamJSFX::_instantiate_playback only.
+  GDREGISTER_INTERNAL_CLASS(AudioStreamPlaybackJSFX);
 
   jsfx_loader = Ref<AudioEffectJSFXLoader>(memnew(AudioEffectJSFXLoader));
   ResourceLoader::get_singleton()->add_resource_format_loader(jsfx_loader);

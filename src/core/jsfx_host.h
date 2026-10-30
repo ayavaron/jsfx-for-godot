@@ -9,6 +9,12 @@ extern "C" {
 
 #define JSFX_HOST_MAX_SLIDERS 256
 #define JSFX_HOST_MAX_SPL 64
+#define JSFX_HOST_MAX_MIDI 256
+
+typedef struct JsfxMidiEvent {
+  int offset;
+  unsigned char status, data1, data2;
+} JsfxMidiEvent;
 
 /* Per-VM state handed to EEL2 through NSEEL_VM_SetCustomFuncThis. Slider and
  * spl pointers refer to EEL2 variable storage owned by the VM. */
@@ -17,6 +23,13 @@ typedef struct JsfxHostState {
   double* spl[JSFX_HOST_MAX_SPL];
   /* Target for slider(n)/spl(n) with an out-of-range index. */
   double scratch;
+  /* MIDI for the current block: midirecv reads midi_in from midi_in_pos;
+   * midisend appends to midi_out. The host fills and clears both. */
+  JsfxMidiEvent midi_in[JSFX_HOST_MAX_MIDI];
+  int midi_in_count;
+  int midi_in_pos;
+  JsfxMidiEvent midi_out[JSFX_HOST_MAX_MIDI];
+  int midi_out_count;
 } JsfxHostState;
 
 /* Backs the first `slots` EEL2 memory slots of `vm` with one virtual-memory

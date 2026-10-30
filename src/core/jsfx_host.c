@@ -79,6 +79,56 @@ static EEL_F NSEEL_CGEN_CALL host_minus_one(void* opaque, INT_PTR count,
   return -1.0;
 }
 
+/* midirecv(offset, msg1, msg23) or midirecv(offset, msg1, msg2, msg3):
+ * returns 1 and fills the arguments with the next event of this block, or 0
+ * when none are left. msg23 packs data1 | data2 << 8. */
+static EEL_F NSEEL_CGEN_CALL host_midirecv(void* opaque, INT_PTR count,
+                                           EEL_F** params) {
+  JsfxHostState* state = (JsfxHostState*)opaque;
+  const JsfxMidiEvent* event;
+  if (!state || count < 3 || state->midi_in_pos >= state->midi_in_count) {
+    return 0.0;
+  }
+  event = &state->midi_in[state->midi_in_pos++];
+  *params[0] = event->offset;
+  *params[1] = event->status;
+  if (count >= 4) {
+    *params[2] = event->data1;
+    *params[3] = event->data2;
+  } else {
+    *params[2] = event->data1 + event->data2 * 256.0;
+  }
+  return 1.0;
+}
+
+static unsigned char midi_byte(EEL_F value) {
+  const int v = (int)value;
+  return (unsigned char)(v < 0 ? 0 : v > 255 ? 255 : v);
+}
+
+/* midisend(offset, msg1, msg23) or midisend(offset, msg1, msg2, msg3). The
+ * host forwards these to Godot (AudioEffectJSFX.midi_sent). */
+static EEL_F NSEEL_CGEN_CALL host_midisend(void* opaque, INT_PTR count,
+                                           EEL_F** params) {
+  JsfxHostState* state = (JsfxHostState*)opaque;
+  JsfxMidiEvent* event;
+  if (!state || count < 3 || state->midi_out_count >= JSFX_HOST_MAX_MIDI) {
+    return 0.0;
+  }
+  event = &state->midi_out[state->midi_out_count++];
+  event->offset = (int)(*params[0] < 0 ? 0 : *params[0]);
+  event->status = midi_byte(*params[1]);
+  if (count >= 4) {
+    event->data1 = midi_byte(*params[2]);
+    event->data2 = midi_byte(*params[3]);
+  } else {
+    const int packed = (int)*params[2];
+    event->data1 = (unsigned char)(packed & 0xFF);
+    event->data2 = (unsigned char)((packed >> 8) & 0xFF);
+  }
+  return event->status ? (EEL_F)event->status : 1.0;
+}
+
 /* get_host_numchan(): Godot effect instances are always stereo. */
 static EEL_F NSEEL_CGEN_CALL host_two(void* opaque, INT_PTR count,
                                       EEL_F** params) {
@@ -183,11 +233,11 @@ void jsfx_host_register_functions(void) {
   NSEEL_addfunc_varparm("slider_show", 1, NSEEL_PProc_THIS, &host_passthrough);
   NSEEL_addfunc_varparm("slider_next_chg", 1, NSEEL_PProc_THIS, &host_minus_one);
 
-  /* MIDI: no input events, sends are dropped. */
-  NSEEL_addfunc_varparm("midirecv", 1, NSEEL_PProc_THIS, &host_zero);
+  /* Short MIDI messages in and out. SysEx and buffer variants are no-ops. */
+  NSEEL_addfunc_varparm("midirecv", 3, NSEEL_PProc_THIS, &host_midirecv);
+  NSEEL_addfunc_varparm("midisend", 3, NSEEL_PProc_THIS, &host_midisend);
   NSEEL_addfunc_varparm("midirecv_buf", 1, NSEEL_PProc_THIS, &host_zero);
   NSEEL_addfunc_varparm("midirecv_str", 1, NSEEL_PProc_THIS, &host_zero);
-  NSEEL_addfunc_varparm("midisend", 1, NSEEL_PProc_THIS, &host_zero);
   NSEEL_addfunc_varparm("midisend_buf", 1, NSEEL_PProc_THIS, &host_zero);
   NSEEL_addfunc_varparm("midisend_str", 1, NSEEL_PProc_THIS, &host_zero);
   NSEEL_addfunc_varparm("midisyx", 1, NSEEL_PProc_THIS, &host_zero);

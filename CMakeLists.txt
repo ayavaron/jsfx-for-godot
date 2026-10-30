@@ -322,6 +322,8 @@ if(JSFX_BUILD_GODOT)
     src/godot/audio_effect_jsfx.cpp
     src/godot/audio_effect_jsfx_instance.cpp
     src/godot/audio_effect_jsfx_loader.cpp
+    src/godot/audio_stream_jsfx.cpp
+    src/godot/jsfx_runtime.cpp
   )
   add_library(jsfx_gdextension SHARED ${JSFX_GODOT_SOURCES})
   target_include_directories(jsfx_gdextension PRIVATE src)
@@ -408,6 +410,9 @@ if(JSFX_BUILD_TESTS)
       tests/slider_queue_test.cpp
     )
     target_link_libraries(jsfx_tests PRIVATE jsfx_core Catch2::Catch2WithMain)
+    # Lets tests load the demo project's .jsfx files.
+    target_compile_definitions(jsfx_tests PRIVATE
+      JSFX_DEMO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/demo")
     jsfx_set_warnings(jsfx_tests)
     find_package(Threads REQUIRED)
     target_link_libraries(jsfx_tests PRIVATE Threads::Threads)

@@ -7,9 +7,10 @@ JSFX is the text-based DSP scripting language REAPER uses for its built-in
 and community effects: compressors, filters, delays, distortion, spectral
 tools and more, written in Cockos' EEL2 language. This GDExtension compiles
 `.jsfx` files with the real EEL2 engine (the x64 JIT on desktop) and runs them
-as ordinary Godot `AudioEffect`s on your audio buses. Each JSFX slider becomes
-a Godot property, so you can automate it with `Tween`, `AnimationPlayer` or
-one line of GDScript.
+as ordinary Godot `AudioEffect`s on your audio buses, or plays JSFX synths as
+instruments you send MIDI notes to from GDScript. Each JSFX slider becomes a
+Godot property, so you can automate it with `Tween`, `AnimationPlayer` or one
+line of GDScript.
 
 ```gdscript
 var lowpass := load("res://effects/lowpass.jsfx") as AudioEffectJSFX
@@ -28,9 +29,11 @@ lowpass.slider_1_cutoff_hz = lerpf(400.0, 18000.0, health / max_health)
 - **Godot developers** who need effects Godot doesn't ship (bit crushers,
   waveshapers, resonant filters, custom dynamics) and would rather write 20
   lines of EEL2 than a native plug-in.
+- **Procedural and interactive music**: play a JSFX synth from gameplay code,
+  positioned in 2D or 3D space like any other sound.
 
-It is not a REAPER host: there's no JSFX graphics (`@gfx`), MIDI routing or
-file browser. See [Limitations](#limitations).
+It is not a REAPER host: there's no JSFX graphics (`@gfx`), MIDI routing
+between effects, or file browser. See [Limitations](#limitations).
 
 ## Features
 
@@ -54,6 +57,12 @@ file browser. See [Limitations](#limitations).
   values. A script that fails to compile logs the EEL2 error with
   its line number and the previous version keeps playing. `reload_script()` does
   the same at runtime.
+- **Instruments and MIDI.** `AudioStreamJSFX` plays a JSFX synth through
+  `AudioStreamPlayer`, `AudioStreamPlayer2D` or `AudioStreamPlayer3D`.
+  `note_on`, `note_off`, `control_change`, `pitch_bend`, `all_notes_off` and
+  raw `send_midi` feed the script's `midirecv`, and anything it sends with
+  `midisend` arrives as the `midi_sent` signal. Bus effects receive MIDI the
+  same way.
 - **Real-time safe.** The audio thread never locks, allocates, parses or
   compiles. Parameter changes travel through a lock-free queue, and hot reload
   is an atomic pointer swap with deferred reclamation.
@@ -100,14 +109,47 @@ fx.downsample_factor = 2                     # half the CPU, lower fidelity
 fx.reload_script()                           # recompile after editing the file
 ```
 
+### Instruments
+
+```gdscript
+var synth := AudioStreamJSFX.new()
+synth.jsfx = load("res://instruments/simple_synth.jsfx")
+$Piano3D.stream = synth                   # AudioStreamPlayer, 2D or 3D
+$Piano3D.play()
+
+var keys := synth.jsfx                    # the instrument's AudioEffectJSFX
+keys.note_on(60, 100)                     # note, velocity, channel = 0
+keys.note_off(60)
+keys.control_change(1, 64)                # mod wheel
+keys.pitch_bend(0.5)                      # -1.0 ... 1.0
+keys.all_notes_off()
+keys.slider_5_cutoff_hz = 800.0           # sliders work as for effects
+
+keys.midi_sent.connect(func(status, data1, data2): print("script sent ", data1))
+```
+
+Each `play()` runs its own copy of the script with silent input; MIDI sent to
+`synth.jsfx` reaches every playing copy at the start of its next audio block.
+Delivery is therefore quantized to Godot's mix block (about 5–10 ms), which
+is fine for gameplay and generated music but too coarse for playing back a
+recorded MIDI performance with exact timing. Polyphony is the script's job:
+JSFX synths manage their own voices. `synth_demo.tscn` in the demo project is
+a playable example (keys A–K, mouse for filter and pitch bend).
+
+A synth has to be an `AudioStreamJSFX`, not a bus effect. Godot discards the
+output of effects on a bus that nothing is playing into, so a synth on an
+empty bus would never be heard.
+
 Property names are `slider_<N>_<description>`, where the description is
 lowercased with spaces and punctuation turned into `_`. `Cutoff (Hz)` becomes
 `slider_1_cutoff_hz`. Check the inspector or `get_property_list()` if unsure.
 
-The [demo project](demo/) contains three example effects. `gain.jsfx` is the
-minimal case. `effects/lowpass.jsfx` is a resonant filter with named and log
-sliders. `effects/tremolo.jsfx` uses an enum slider and imports a shared
-`lib/lfo.jsfx-inc`.
+The [demo project](demo/) contains three example effects and an instrument.
+`gain.jsfx` is the minimal case. `effects/lowpass.jsfx` is a resonant filter
+with named and log sliders. `effects/tremolo.jsfx` uses an enum slider and
+imports a shared `lib/lfo.jsfx-inc`. `instruments/simple_synth.jsfx` is an
+8-voice synth with an envelope and filter that responds to notes, the mod
+wheel and pitch bend.
 
 ### Using REAPER's effects
 
@@ -130,8 +172,11 @@ of noise each.
 | Need EEL2 string functions (`sprintf`, `strcpy`, `strlen`) | 6 |
 | Need `mdct`/`imdct` | 4 |
 
-Most of the 234 are audio effects, which work fully. MIDI effects also
-compile, but their MIDI calls are no-ops, since Godot buses carry no MIDI.
+Most of the 234 are audio effects, which work fully. MIDI effects receive the
+messages you send from GDScript, and their `midisend` output arrives as the
+`midi_sent` signal. Only one of REAPER's 8 bundled synths loads (Tolerable
+Tines, which plays correctly as an `AudioStreamJSFX`): the others load their
+samples with `file_open` or need string functions.
 
 Supported beyond the basics: named sliders (`slider1:name=0<...>`), up to 256
 sliders, `:log`/`:sqr` slider shapes, hidden sliders (`-description`), file
@@ -175,6 +220,11 @@ For example, lowpass drops from 18.0 µs to 9.9 µs and then 5.0 µs. The script
 sees the reduced `srate`, so filters and delays keep their tuning, but
 everything above the reduced Nyquist frequency is lost (zero-order hold). It
 works well for background voices and radios.
+
+**Instruments** cost CPU while playing whether or not notes are sounding,
+since the script runs every block. The demo synth uses 0.25% of a core idle
+and 0.86% with all 8 voices sounding (x64 JIT); in the interpreter used on Web
+that is 0.96% and 6.1%. Stop players you aren't using.
 
 `force_mono` makes the output mono (left channel into both outputs). It does
 **not** reduce CPU, because a stereo script still runs all its per-channel
@@ -223,7 +273,7 @@ flat frame times.
 
 ### Binary size
 
-The Windows release DLL is 631 KB with the C++ runtime linked statically, so
+The Windows release DLL is 692 KB with the C++ runtime linked statically, so
 players don't need the VC++ redistributable. The Web side module is about
 7 MB.
 
@@ -234,7 +284,9 @@ players don't need the VC++ redistributable. The Web side module is about
 - No EEL2 strings, `file_*` functions, `<? ?>` preprocessor or `mdct`. Effects
   that need them fail to compile and pass audio through unchanged, with the
   error logged.
-- No MIDI. `midirecv` always returns 0 and `midisend` is dropped.
+- MIDI is short messages only (no SysEx: the `_buf`/`_str` variants are
+  no-ops), arrives at the start of the next mix block rather than at an exact
+  sample, and is not routed between effects.
 - Stereo only (`spl0`/`spl1`). `num_ch` is 2.
 - `tempo` defaults to 120 BPM and `play_state` to "playing", with
   `beat_position`/`play_position` advancing in real time. Godot has no
@@ -280,11 +332,11 @@ Linux/macOS: `cmake -S . -B build/godot -G Ninja -DCMAKE_BUILD_TYPE=Release
 
 | Suite | What it covers | Command |
 |---|---|---|
-| Catch2 (27 cases) | Parser leniency, imports, host functions, FFT, gain accuracy (RMS within 1e-6), memory bounds, the Web memory path (forced on desktop), denormal flushing, lock-free queue under contention, lo-fi modes | `ctest --preset windows-release` |
+| Catch2 (29 cases) | Parser leniency, imports, host functions, MIDI in/out, the demo synth playing and releasing notes, FFT, gain accuracy (RMS within 1e-6), memory bounds, the Web memory path (forced on desktop), denormal flushing, lock-free queue under contention, lo-fi modes | `ctest --preset windows-release` |
 | Smoke | Registration, loader, properties, serialization, hot reload, teardown | `godot --headless --path demo --script res://tests/extension_smoke.gd` |
-| GUT (8 tests) | Property hints and serialization, imports, threaded loading, Tween automation, parameter-burst stress | `tools/fetch_gut.ps1`, then `godot --headless --path demo -s addons/gut/gut_cmdln.gd -gdir=res://tests/unit -gexit` |
-| Audio probe | Real audio: output accuracy, 400+ hot reloads while playing, downsampled `srate`, 17 live instances | `godot --headless --audio-driver WASAPI --path demo --script res://tests/audio_probe.gd` |
-| Browser | Web exports, both threading modes, in Chrome; `?instances=N` plus `--settle-ms` reports the WebAssembly heap | `tools/serve_web.py` + `tools/browser_smoke.py` |
+| GUT (9 tests) | Property hints and serialization, imports, threaded loading, Tween automation, parameter-burst stress, the instrument MIDI API | `tools/fetch_gut.ps1`, then `godot --headless --path demo -s addons/gut/gut_cmdln.gd -gdir=res://tests/unit -gexit` |
+| Audio probe | Real audio: output accuracy, 400+ hot reloads while playing, downsampled `srate`, a synth playing and releasing notes, `midisend` reaching `midi_sent`, 17 live instances | `godot --headless --audio-driver WASAPI --path demo --script res://tests/audio_probe.gd` |
+| Browser | Web exports, both threading modes, in Chrome; `?instances=N` plus `--settle-ms` reports the WebAssembly heap, `?synth=1` plays a chord and reports its level | `tools/serve_web.py` + `tools/browser_smoke.py` |
 | Corpus bench | Every `.jsfx` you point it at: compatibility, CPU, memory (`--no-os-mapping` measures the Web memory path) | `jsfx_bench --import-dir <Effects> <files...>` |
 
 Import the demo once before running the Godot suites:
@@ -300,10 +352,14 @@ still generating docs for a newly discovered extension.
  .jsfx ─► JsfxDocument::parse  (sections, sliders, imports)
         ─► Eel2Context::create (compile, map memory, run @init)
         ─► JsfxProcessor ──── atomic pointer ───► AudioEffectJSFXInstance::_process
- property set ─► lock-free MPSC queue ──────────►   drain queue → @slider
+ property set, MIDI ─► lock-free queues ────────►   drain queues → @slider, midirecv
  hot reload  ─► new processor, atomic swap ─────►   @block, @sample per frame
                (old one freed once the audio thread has left it)
+ midi_sent signal ◄── lock-free queue ◄─────────────  midisend
 ```
+
+Bus effects (`AudioEffectJSFXInstance`) and instruments
+(`AudioStreamPlaybackJSFX`) share the same runtime (`src/godot/jsfx_runtime`).
 
 `src/core` and `include/jsfx` hold a Godot-free C++20 library: parser, EEL2
 wrapper, processor and queue. `src/godot` holds the GDExtension bridge.

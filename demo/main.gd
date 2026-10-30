@@ -18,6 +18,10 @@ var _phase := 0.0
 var _audio_started := false
 var _start_delay := -1.0
 var _frames_reported := false
+var _synth: AudioEffectJSFX
+var _synth_reported := false
+var _synth_bus := -1
+var _synth_wait := -1.0
 
 
 func _ready() -> void:
@@ -55,6 +59,21 @@ func _ready() -> void:
 	if extra > 0:
 		print("JSFX_EXTRA_INSTANCES=", extra)
 
+	# Instrument probe: `?synth=1` also plays a chord on the demo synth.
+	if OS.has_feature("web") and str(JavaScriptBridge.eval(
+			"new URLSearchParams(location.search).get('synth') || ''")) == "1":
+		var stream := AudioStreamJSFX.new()
+		stream.jsfx = load("res://instruments/simple_synth.jsfx")
+		_synth = stream.jsfx
+		_synth_bus = AudioServer.bus_count
+		AudioServer.add_bus(_synth_bus)
+		AudioServer.set_bus_name(_synth_bus, "Synth")
+		var synth_player := AudioStreamPlayer.new()
+		synth_player.stream = stream
+		synth_player.bus = "Synth"
+		add_child(synth_player)
+		synth_player.play()
+
 	print("JSFX_WEB_READY")
 
 
@@ -90,6 +109,18 @@ func _process(delta: float) -> void:
 			var sample := sin(_phase) * 0.25
 			_phase = fmod(_phase + TAU * TONE_HZ / MIX_RATE, TAU)
 			_playback.push_frame(Vector2(sample, sample))
+
+	if _synth != null and not _synth_reported:
+		if _synth.note_on(60, 100) and _synth.get_processed_frames() > 0:
+			_synth_reported = true
+			_synth.note_on(64, 100)
+			_synth.note_on(67, 100)
+			print("JSFX_SYNTH_PLAYING frames=", _synth.get_processed_frames())
+			_synth_wait = 0.5
+	if _synth_wait > 0.0:
+		_synth_wait -= delta
+		if _synth_wait <= 0.0:
+			print("JSFX_SYNTH_PEAK_DB=", AudioServer.get_bus_peak_volume_left_db(_synth_bus, 0))
 
 	if _frames_reported or _effect == null:
 		return

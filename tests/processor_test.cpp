@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <string_view>
@@ -488,4 +490,79 @@ TEST_CASE("on-demand EEL2 memory never allocates on the audio thread",
     process_one(*created.value(), 1.0f, 1.0f);
     CHECK(pool::available() == before);
   }
+}
+
+TEST_CASE("processor delivers MIDI to midirecv and collects midisend",
+          "[processor][midi]") {
+  // Echoes every event (4-argument form) and counts them; also re-sends each
+  // one with the 3-argument packed form, transposed up an octave.
+  auto created = jsfx::JsfxProcessor::create(
+      "@block\n"
+      "received = 0;\n"
+      "while (midirecv(ofs, m1, m2, m3)) (\n"
+      "  received += 1; last_note = m2; last_vel = m3;\n"
+      "  midisend(ofs, m1, (m2 + 12) | (m3 * 256));\n"
+      ");\n"
+      "@sample\n"
+      "spl0 = received; spl1 = last_note;\n",
+      make_environment());
+  REQUIRE(created.ok());
+  jsfx::JsfxProcessor& processor = *created.value();
+
+  REQUIRE(processor.add_midi_input({0, 0x90, 60, 100}));
+  REQUIRE(processor.add_midi_input({0, 0x80, 64, 0}));
+  jsfx::AudioFrame out = process_one(processor, 0.0f, 0.0f);
+  CHECK(out.left == Approx(2.0));
+  CHECK(out.right == Approx(64.0));
+
+  const auto sent = processor.midi_output();
+  REQUIRE(sent.size() == 2);
+  CHECK(sent[0].status == 0x90);
+  CHECK(sent[0].data1 == 72);
+  CHECK(sent[0].data2 == 100);
+  CHECK(sent[1].data1 == 76);
+
+  // Input is consumed per block; output is replaced by the next block's.
+  out = process_one(processor, 0.0f, 0.0f);
+  CHECK(out.left == Approx(0.0));
+  CHECK(processor.midi_output().empty());
+
+  // The per-block limit is enforced without allocating.
+  int accepted = 0;
+  while (processor.add_midi_input({0, 0x90, 1, 1})) ++accepted;
+  CHECK(accepted == jsfx::kMaxMidiEventsPerBlock);
+  CHECK(process_one(processor, 0.0f, 0.0f).left ==
+        Approx(jsfx::kMaxMidiEventsPerBlock));
+  CHECK(processor.midi_output().size() ==
+        static_cast<std::size_t>(jsfx::kMaxMidiEventsPerBlock));
+}
+
+TEST_CASE("demo synth plays notes from MIDI", "[processor][midi][demo]") {
+  std::ifstream file(JSFX_DEMO_DIR "/instruments/simple_synth.jsfx",
+                     std::ios::binary);
+  REQUIRE(file);
+  const std::string source((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+  auto created = jsfx::JsfxProcessor::create(source, make_environment());
+  REQUIRE(created.ok());
+  jsfx::JsfxProcessor& synth = *created.value();
+
+  auto rms_of_next = [&synth](int frames) {
+    std::vector<jsfx::AudioFrame> block(static_cast<std::size_t>(frames));
+    synth.process(block.data(), block.data(), frames);
+    double sum = 0.0;
+    for (const jsfx::AudioFrame& frame : block) sum += frame.left * frame.left;
+    return std::sqrt(sum / frames);
+  };
+
+  CHECK(rms_of_next(4800) == 0.0);  // silent until a note arrives
+
+  REQUIRE(synth.add_midi_input({0, 0x90, 57, 110}));  // A3
+  REQUIRE(synth.add_midi_input({0, 0x90, 64, 110}));  // E4
+  CHECK(rms_of_next(9600) > 0.02);
+
+  REQUIRE(synth.add_midi_input({0, 0x80, 57, 0}));
+  REQUIRE(synth.add_midi_input({0, 0x80, 64, 0}));
+  rms_of_next(48000 * 3);  // well past the 400 ms release
+  CHECK(rms_of_next(4800) < 1e-4);
 }

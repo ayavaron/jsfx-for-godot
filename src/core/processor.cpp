@@ -52,6 +52,9 @@ struct JsfxProcessor::Impl {
   double* spl0 = nullptr;
   double* spl1 = nullptr;
 
+  std::array<MidiMessage, kMaxMidiEventsPerBlock> midi_out{};
+  int midi_out_count = 0;
+
   int downsample_factor = 1;
   bool force_mono = false;
   int downsample_phase = 0;
@@ -166,8 +169,31 @@ bool JsfxProcessor::force_mono() const {
   return impl_ != nullptr && impl_->force_mono;
 }
 
+bool JsfxProcessor::add_midi_input(const MidiMessage& message) {
+  return impl_ != nullptr && impl_->context->push_midi_input(message);
+}
+
+std::span<const MidiMessage> JsfxProcessor::midi_output() const {
+  if (impl_ == nullptr) return {};
+  return {impl_->midi_out.data(), static_cast<std::size_t>(impl_->midi_out_count)};
+}
+
 void JsfxProcessor::process(const AudioFrame* input, AudioFrame* output,
                             int frame_count) {
+  process_block(input, output, frame_count);
+  if (impl_ == nullptr || frame_count <= 0) return;
+
+  // Publish this block's midisend output, then drop unread MIDI input.
+  impl_->midi_out_count =
+      std::min(impl_->context->midi_output_count(), kMaxMidiEventsPerBlock);
+  for (int i = 0; i < impl_->midi_out_count; ++i) {
+    impl_->midi_out[static_cast<std::size_t>(i)] = impl_->context->midi_output(i);
+  }
+  impl_->context->clear_midi();
+}
+
+void JsfxProcessor::process_block(const AudioFrame* input, AudioFrame* output,
+                                  int frame_count) {
   if (impl_ == nullptr || input == nullptr || output == nullptr ||
       frame_count <= 0) {
     return;
