@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 JSFX for Godot: a GDExtension for Godot 4.x that loads and runs Reaper JSFX (WDL/EEL2) inside Godot's `AudioServer`, exposing JSFX sliders as native Godot properties for gameplay automation.
 
-All three PRD phases are implemented and public as v0.1.0. `jsfx_to_godot_prd.md` is the original spec; where the code deliberately departs from it (lazy OS-backed EEL2 memory, `force_mono` not saving CPU, downsampled scripts seeing the reduced `srate`), README.md documents the shipped behavior.
+All three PRD phases are implemented and public (latest release v0.1.1). `jsfx_to_godot_prd.md` is the original spec; where the code deliberately departs from it (lazy OS-backed EEL2 memory, `force_mono` not saving CPU, downsampled scripts seeing the reduced `srate`), README.md documents the shipped behavior.
 
 ## Build and test status
 

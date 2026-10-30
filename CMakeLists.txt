@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(jsfx_for_godot VERSION 0.1.0 LANGUAGES C CXX)
+project(jsfx_for_godot VERSION 0.1.1 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
   # Emscripten's platform module reports no shared-library support, but a
