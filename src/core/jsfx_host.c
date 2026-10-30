@@ -120,20 +120,29 @@ static EEL_F NSEEL_CGEN_CALL host_time_precise(void* opaque, INT_PTR count,
   return now;
 }
 
+static int g_os_mapping_enabled = 1;
+
+void jsfx_host_set_os_mapping_enabled(int enabled) {
+  g_os_mapping_enabled = enabled;
+}
+
+int jsfx_host_os_mapping_enabled(void) { return g_os_mapping_enabled; }
+
 void* jsfx_host_map_ram(void* vm, int slots) {
   compileContext* ctx = (compileContext*)vm;
   const size_t bytes = (size_t)slots * sizeof(EEL_F);
   const int blocks = slots / NSEEL_RAM_ITEMSPERBLOCK;
   char* region = NULL;
   int i;
-  if (!ctx || !ctx->ram_state || blocks <= 0 || blocks > NSEEL_RAM_BLOCKS) {
+  if (!g_os_mapping_enabled || !ctx || !ctx->ram_state || blocks <= 0 ||
+      blocks > NSEEL_RAM_BLOCKS) {
     return NULL;
   }
 #if defined(_WIN32)
   region = (char*)VirtualAlloc(NULL, bytes, MEM_RESERVE | MEM_COMMIT,
                                PAGE_READWRITE);
 #elif !defined(__EMSCRIPTEN__)
-  /* Wasm has no lazily backed pages; Web builds keep the calloc path. */
+  /* Wasm has no lazily backed pages; Web builds use the block pool. */
   region = (char*)mmap(NULL, bytes, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (region == (char*)MAP_FAILED) region = NULL;

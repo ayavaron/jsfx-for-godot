@@ -40,6 +40,21 @@ func _ready() -> void:
 	var tween := create_tween().set_loops()
 	tween.tween_property(_effect, "slider_1_gain", 0.5, 2.0).from(0.05)
 
+	# Memory probe: `?instances=N` in a Web export adds N lowpass effects, each
+	# on its own bus, so browser_smoke.py can compare heap sizes.
+	var extra := 0
+	if OS.has_feature("web"):
+		extra = int(str(JavaScriptBridge.eval(
+			"new URLSearchParams(location.search).get('instances') || '0'")))
+	for i in extra:
+		var bus := AudioServer.bus_count
+		AudioServer.add_bus(bus)
+		var lowpass := AudioEffectJSFX.new()
+		lowpass.script_path = "res://effects/lowpass.jsfx"
+		AudioServer.add_bus_effect(bus, lowpass)
+	if extra > 0:
+		print("JSFX_EXTRA_INSTANCES=", extra)
+
 	print("JSFX_WEB_READY")
 
 

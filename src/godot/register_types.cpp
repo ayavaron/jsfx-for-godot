@@ -37,6 +37,7 @@ void initialize_jsfx_module(ModuleInitializationLevel level) {
 void uninitialize_jsfx_module(ModuleInitializationLevel level) {
   if (level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
 
+  shutdown_ram_pool();
   if (jsfx_loader.is_valid()) {
     ResourceLoader::get_singleton()->remove_resource_format_loader(jsfx_loader);
     jsfx_loader = Ref<AudioEffectJSFXLoader>();

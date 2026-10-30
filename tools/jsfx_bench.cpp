@@ -5,10 +5,13 @@
 // numbers isolate the JSFX engine from the rest of the mixer.
 //
 //   jsfx_bench [--seconds S] [--block N] [--rate HZ] [--downsample F]
-//              [--mono] [--import-dir DIR]... [--memory N] file.jsfx...
+//              [--mono] [--import-dir DIR]... [--memory N]
+//              [--no-os-mapping] file.jsfx...
 //
-// --memory N creates N live instances of the first file and reports the
-// committed and resident memory each one adds.
+// --memory N creates N live instances of the first file, runs --seconds of
+// audio through each, and reports the committed and resident memory each one
+// adds. --no-os-mapping uses the Web allocation path (on-demand blocks from
+// the real-time pool) instead of the desktop OS-backed region.
 //
 // `import` lines resolve against the script's folder, then each --import-dir.
 //
@@ -32,6 +35,7 @@
 #include <vector>
 
 #include "jsfx/jsfx.h"
+#include "jsfx/ram_pool.h"
 
 #if defined(_WIN32)
 #define NOMINMAX
@@ -105,6 +109,8 @@ int main(int argc, char** argv) {
       import_dirs.emplace_back(argv[++i]);
     } else if (!std::strcmp(argv[i], "--memory") && i + 1 < argc) {
       memory_instances = std::max(1, std::atoi(argv[++i]));
+    } else if (!std::strcmp(argv[i], "--no-os-mapping")) {
+      jsfx::ram_pool::set_os_mapping_enabled(false);
     } else if (!std::strcmp(argv[i], "--mono")) {
       mono = true;
     } else {
@@ -131,11 +137,30 @@ int main(int argc, char** argv) {
     jsfx::JsfxEnvironment environment;
     environment.sample_rate = rate;
     std::vector<std::unique_ptr<jsfx::JsfxProcessor>> live;
+    // Fill the shared pool first so its reserve is not counted per instance;
+    // refilling after every block mirrors Godot's per-frame top-up.
+    jsfx::ram_pool::note_on_demand_vm();
     const MemoryUsage before = memory_usage();
+    const int memory_blocks = std::max(1, static_cast<int>(seconds * rate / block));
     for (int i = 0; i < memory_instances; ++i) {
-      auto created = jsfx::JsfxProcessor::create(source, environment, files[0]);
+      std::vector<std::filesystem::path> search{
+          std::filesystem::path(files[0]).parent_path()};
+      search.insert(search.end(), import_dirs.begin(), import_dirs.end());
+      auto parsed = jsfx::JsfxDocument::parse(
+          source, files[0], [&search](std::string_view name) -> std::optional<std::string> {
+            for (const std::filesystem::path& dir : search) {
+              std::string text;
+              if (read_file((dir / std::string(name)).string().c_str(), text)) return text;
+            }
+            return std::nullopt;
+          });
+      if (!parsed.ok()) return 1;
+      auto created = jsfx::JsfxProcessor::create(std::move(parsed.value()), environment);
       if (!created.ok()) return 1;
-      created.value()->process(input.data(), output.data(), block);
+      for (int b = 0; b < memory_blocks; ++b) {
+        created.value()->process(input.data(), output.data(), block);
+        jsfx::ram_pool::refill();
+      }
       live.push_back(std::move(created.value()));
     }
     const MemoryUsage after = memory_usage();
@@ -144,6 +169,10 @@ int main(int argc, char** argv) {
                 files[0], memory_instances,
                 (after.committed_mb - before.committed_mb) / memory_instances,
                 (after.resident_mb - before.resident_mb) / memory_instances);
+    if (jsfx::ram_pool::misses() > 0) {
+      std::printf("POOL_MISSES\t%llu\n",
+                  static_cast<unsigned long long>(jsfx::ram_pool::misses()));
+    }
     return 0;
   }
 

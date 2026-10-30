@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "jsfx/ram_pool.h"
 #include "jsfx_host.h"
 #include "ns-eel.h"
 
@@ -131,12 +132,17 @@ Result<std::unique_ptr<Eel2Context>> Eel2Context::create(
         "failed to reserve the EEL2 RAM window");
   }
   // Desktop: one lazily backed OS region, so RAM is only used for the slots a
-  // script touches. Elsewhere: allocate every block now.
+  // script touches. Web: blocks are allocated when first touched, by calloc on
+  // the main thread and from the pre-filled pool on the audio thread.
+  static_assert(NSEEL_RAM_ITEMSPERBLOCK * sizeof(EEL_F) == ram_pool::kBlockBytes,
+                "EEL2 block size changed; update ram_pool::kBlockBytes");
   impl->ram_region = jsfx_host_map_ram(impl->vm, kEelRamSlots);
-  if (impl->ram_region == nullptr) NSEEL_VM_preallocram(impl->vm, -1);
-  if (NSEEL_VM_getramptr_noalloc(impl->vm, kEelRamSlots - 1, nullptr) == nullptr) {
+  if (impl->ram_region == nullptr) {
+    ram_pool::note_on_demand_vm();
+  } else if (NSEEL_VM_getramptr_noalloc(impl->vm, kEelRamSlots - 1, nullptr) ==
+             nullptr) {
     return Result<std::unique_ptr<Eel2Context>>::failure(
-        "failed to preallocate the EEL2 RAM window");
+        "failed to map the EEL2 RAM window");
   }
 
   auto register_variable = [&](const char* name) -> double* {

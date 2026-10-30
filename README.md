@@ -167,8 +167,8 @@ The Godot probe runs 17 JSFX buses at once and keeps up in real time.
 **Interpreter builds** (Web, ARM, iOS, universal macOS) run EEL2 without the
 JIT. That costs about 1.3–4× the CPU per effect: `lowpass.jsfx` goes from
 0.17% to 0.56% natively, and the heaviest spectral effects reach about 4×.
-Browsers add WebAssembly overhead on top. Budget fewer, simpler effects for
-Web exports.
+Browsers add WebAssembly overhead on top (not yet measured), so budget fewer,
+simpler effects for Web exports.
 
 **Lo-fi mode:** `downsample_factor = 2` halves the cost and `4` quarters it.
 For example, lowpass drops from 18.0 µs to 9.9 µs and then 5.0 µs. The script
@@ -182,23 +182,35 @@ code.
 
 ### Memory
 
-| | Per instance |
-|---|---|
-| RAM actually used (resident) | median **0.24 MB**, 90th percentile 0.31 MB, max 6.2 MB |
-| Virtual address space reserved | 64 MB |
+| | Desktop, per instance | Web, per instance |
+|---|---|---|
+| Memory actually used | median **0.24 MB**, 90th percentile 0.31 MB, max 6.2 MB (resident) | median **0.37 MB**, 90th percentile 1.3 MB, max 7.9 MB (heap) |
+| Address space reserved | 64 MB (virtual) | none |
 
-Every JSFX gets EEL2's full 8M-slot memory, as in REAPER. It is reserved as
-one virtual-memory region whose pages the OS supplies only when a script
-touches them, so a filter costs well under a megabyte. On Windows the 64 MB
-counts toward the system commit limit (pagefile-backed) but not toward RAM in
-use. **Web builds** have no lazily backed pages, so each instance takes its
-full 64 MB from the WebAssembly heap. Keep Web projects to a handful of
-instances.
+Every JSFX can address EEL2's full 8M slots, as in REAPER, but only pays for
+the memory its script touches.
 
-The first touch of each 4 KB memory page costs one page fault (around a
-microsecond) on the audio thread. Stock EEL2, by comparison, allocates 512 KB
-blocks with `calloc` on the audio thread the first time a script touches
-them.
+- **Desktop** reserves one 64 MB virtual-memory region per instance, and the
+  OS supplies pages only when a script first touches them. On Windows the
+  64 MB counts toward the system commit limit (pagefile-backed) but not toward
+  RAM in use. Each first touch of a 4 KB page costs one page fault (around a
+  microsecond) on the audio thread.
+- **Web** has no lazily backed pages, so EEL2 allocates its 512 KB blocks as
+  they are first touched. Inside `@init` that's a normal allocation on the
+  main thread. During playback, blocks come from a shared pool of pre-zeroed
+  blocks (8 by default, 4 MB in total) that the main thread tops up every
+  frame, so the audio thread still never allocates. In Chrome, a demo export
+  with nine JSFX effects uses a 46 MB WebAssembly heap in total; v0.1.0 needed
+  688 MB.
+
+If a script touches more new memory between two frames than the pool holds,
+the excess reads return 0 and writes are dropped until the next refill. Godot
+prints a warning when that happens. No effect in the REAPER corpus came close.
+Raise the reserve with `AudioEffectJSFX.set_memory_pool_blocks(16)` if you
+see the warning. The pool is unused on desktop.
+
+By comparison, stock EEL2 allocates 512 KB blocks with `calloc` on the audio
+thread the first time a script touches them.
 
 ### Load time (main thread)
 
@@ -268,12 +280,12 @@ Linux/macOS: `cmake -S . -B build/godot -G Ninja -DCMAKE_BUILD_TYPE=Release
 
 | Suite | What it covers | Command |
 |---|---|---|
-| Catch2 (26 cases) | Parser leniency, imports, host functions, FFT, gain accuracy (RMS within 1e-6), memory bounds, denormal flushing, lock-free queue under contention, lo-fi modes | `ctest --preset windows-release` |
+| Catch2 (27 cases) | Parser leniency, imports, host functions, FFT, gain accuracy (RMS within 1e-6), memory bounds, the Web memory path (forced on desktop), denormal flushing, lock-free queue under contention, lo-fi modes | `ctest --preset windows-release` |
 | Smoke | Registration, loader, properties, serialization, hot reload, teardown | `godot --headless --path demo --script res://tests/extension_smoke.gd` |
 | GUT (8 tests) | Property hints and serialization, imports, threaded loading, Tween automation, parameter-burst stress | `tools/fetch_gut.ps1`, then `godot --headless --path demo -s addons/gut/gut_cmdln.gd -gdir=res://tests/unit -gexit` |
 | Audio probe | Real audio: output accuracy, 400+ hot reloads while playing, downsampled `srate`, 17 live instances | `godot --headless --audio-driver WASAPI --path demo --script res://tests/audio_probe.gd` |
-| Browser | Web exports, both threading modes, in Chrome | `tools/serve_web.py` + `tools/browser_smoke.py` |
-| Corpus bench | Every `.jsfx` you point it at: compatibility, CPU, memory | `jsfx_bench --import-dir <Effects> <files...>` |
+| Browser | Web exports, both threading modes, in Chrome; `?instances=N` plus `--settle-ms` reports the WebAssembly heap | `tools/serve_web.py` + `tools/browser_smoke.py` |
+| Corpus bench | Every `.jsfx` you point it at: compatibility, CPU, memory (`--no-os-mapping` measures the Web memory path) | `jsfx_bench --import-dir <Effects> <files...>` |
 
 Import the demo once before running the Godot suites:
 `godot --headless --path demo --editor --quit-after 300`. Use
@@ -286,7 +298,7 @@ still generating docs for a newly discovered extension.
  main thread                                   audio thread
  ───────────                                   ────────────
  .jsfx ─► JsfxDocument::parse  (sections, sliders, imports)
-        ─► Eel2Context::create (compile, map 64 MB VM, run @init)
+        ─► Eel2Context::create (compile, map memory, run @init)
         ─► JsfxProcessor ──── atomic pointer ───► AudioEffectJSFXInstance::_process
  property set ─► lock-free MPSC queue ──────────►   drain queue → @slider
  hot reload  ─► new processor, atomic swap ─────►   @block, @sample per frame

@@ -130,7 +130,21 @@ add_library(jsfx_wdl STATIC
   src/core/wdl_host_stubs.c
   # JSFX host functions (slider(), spl(), FFT, MIDI no-ops, ...).
   src/core/jsfx_host.c
+  # Real-time block pool that nseel-ram.c's calloc is redirected to.
+  src/core/ram_pool.cpp
 )
+target_include_directories(jsfx_wdl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# Redirect calloc in nseel-ram.c (only) to the block pool, at build time, so
+# the vendored file stays unmodified.
+set(JSFX_RAM_REDIRECT "${CMAKE_CURRENT_SOURCE_DIR}/src/core/jsfx_ram_redirect.h")
+if(MSVC)
+  set_source_files_properties(third_party/wdl/eel2/nseel-ram.c PROPERTIES
+    COMPILE_OPTIONS "/FI${JSFX_RAM_REDIRECT}")
+else()
+  set_source_files_properties(third_party/wdl/eel2/nseel-ram.c PROPERTIES
+    COMPILE_OPTIONS "-include;${JSFX_RAM_REDIRECT}")
+endif()
 
 # jsfx_host.c is ours, not vendored: an implicit declaration there truncates
 # 64-bit pointers, so make it an error even though WDL builds with warnings off.

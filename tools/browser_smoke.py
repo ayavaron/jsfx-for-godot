@@ -51,6 +51,8 @@ def main():
     parser.add_argument("--executable", default=None,
                         help="Chrome/Edge executable; defaults are tried")
     parser.add_argument("--screenshot", default="")
+    parser.add_argument("--settle-ms", type=int, default=0,
+                        help="Keep audio running this long before measuring")
     args = parser.parse_args()
 
     candidates = [
@@ -90,6 +92,28 @@ def main():
         context = browser.new_context(viewport={"width": 800, "height": 600})
         page = context.new_page()
         page.add_init_script("""
+            // Track every WebAssembly memory so the heap size can be reported.
+            window.__jsfxMemories = [];
+            const OriginalMemory = WebAssembly.Memory;
+            WebAssembly.Memory = function(descriptor) {
+                const memory = new OriginalMemory(descriptor);
+                window.__jsfxMemories.push(memory);
+                return memory;
+            };
+            WebAssembly.Memory.prototype = OriginalMemory.prototype;
+            for (const name of ["instantiate", "instantiateStreaming"]) {
+                const original = WebAssembly[name];
+                WebAssembly[name] = async function(...args) {
+                    const result = await original.apply(this, args);
+                    const exports = (result.instance || result).exports || {};
+                    for (const value of Object.values(exports)) {
+                        if (value instanceof OriginalMemory) {
+                            window.__jsfxMemories.push(value);
+                        }
+                    }
+                    return result;
+                };
+            }
             window.__jsfxAudioContexts = [];
             const OriginalAudioContext = window.AudioContext;
             if (OriginalAudioContext) {
@@ -125,6 +149,16 @@ def main():
         processed = wait_for_log(page, logs, "JSFX_WEB_PROCESSED=",
                                  args.timeout_ms, click_canvas=True)
 
+        if args.settle_ms > 0:
+            page.wait_for_timeout(args.settle_ms)
+
+        try:
+            heap_mb = page.evaluate(
+                "Math.max(0, ...(window.__jsfxMemories || []).map("
+                "m => m.buffer.byteLength)) / 1048576")
+        except Exception:
+            heap_mb = None
+
         try:
             isolated = page.evaluate("crossOriginIsolated")
         except Exception:
@@ -141,6 +175,7 @@ def main():
         except Exception:
             user_active = None
 
+        print(f"WASM_HEAP_MB={heap_mb}")
         print(f"crossOriginIsolated={isolated}")
         print(f"audio_context_states={audio_states}")
         print(f"user_activation={user_active}")

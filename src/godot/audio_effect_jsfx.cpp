@@ -25,6 +25,9 @@
 
 #include "audio_effect_jsfx_instance.h"
 #include "jsfx/processor.h"
+#include "jsfx/ram_pool.h"
+
+#include <godot_cpp/variant/callable_method_pointer.hpp>
 
 using namespace godot;
 
@@ -41,6 +44,35 @@ double current_mix_rate() {
     if (rate > 0.0) return rate;
   }
   return 48000.0;
+}
+
+/// Tops up the real-time EEL2 memory pool once per frame (Web builds; on
+/// desktop the pool is unused and this is never connected).
+void pump_ram_pool() {
+  jsfx::ram_pool::refill();
+
+  static std::uint64_t reported = 0;
+  const std::uint64_t misses = jsfx::ram_pool::misses();
+  if (misses > reported && misses >= reported * 2) {
+    WARN_PRINT(String("JSFX: a script touched new memory faster than the pool "
+                      "refills (") +
+               String::num_uint64(misses) +
+               " misses); raise AudioEffectJSFX.set_memory_pool_blocks().");
+    reported = misses;
+  }
+}
+
+bool g_pump_connected = false;
+
+void ensure_ram_pool_pump() {
+  if (g_pump_connected || jsfx::ram_pool::target_blocks() == 0) return;
+  Engine* engine = Engine::get_singleton();
+  SceneTree* tree =
+      engine != nullptr ? Object::cast_to<SceneTree>(engine->get_main_loop())
+                        : nullptr;
+  if (tree == nullptr) return;
+  tree->connect("process_frame", callable_mp_static(&pump_ram_pool));
+  g_pump_connected = true;
 }
 
 bool on_main_thread() {
@@ -110,6 +142,29 @@ bool parse_slider_property_index(const StringName& property, int& index) {
 
 namespace jsfx_godot {
 
+void shutdown_ram_pool() {
+  if (g_pump_connected) {
+    Engine* engine = Engine::get_singleton();
+    SceneTree* tree =
+        engine != nullptr ? Object::cast_to<SceneTree>(engine->get_main_loop())
+                          : nullptr;
+    if (tree != nullptr) {
+      tree->disconnect("process_frame", callable_mp_static(&pump_ram_pool));
+    }
+    g_pump_connected = false;
+  }
+  jsfx::ram_pool::release_all();
+}
+
+void AudioEffectJSFX::set_memory_pool_blocks(int blocks) {
+  jsfx::ram_pool::set_target_blocks(blocks);
+  jsfx::ram_pool::refill();
+}
+
+int AudioEffectJSFX::get_memory_pool_blocks() {
+  return jsfx::ram_pool::target_blocks();
+}
+
 struct AudioEffectJSFX::LoadedScript {
   jsfx::JsfxDocument document;
   bool has_document = false;
@@ -165,6 +220,12 @@ void AudioEffectJSFX::_bind_methods() {
                        &AudioEffectJSFX::get_processed_frames);
   ClassDB::bind_method(D_METHOD("reload_script"),
                        &AudioEffectJSFX::reload_script);
+  ClassDB::bind_static_method("AudioEffectJSFX",
+                              D_METHOD("set_memory_pool_blocks", "blocks"),
+                              &AudioEffectJSFX::set_memory_pool_blocks);
+  ClassDB::bind_static_method("AudioEffectJSFX",
+                              D_METHOD("get_memory_pool_blocks"),
+                              &AudioEffectJSFX::get_memory_pool_blocks);
 
   // Editor file-watch target; internal, not intended for scripts.
   ClassDB::bind_method(D_METHOD("_poll_script_file"),
@@ -542,6 +603,7 @@ Ref<AudioEffectInstance> AudioEffectJSFX::_instantiate() {
 
   AudioEffectJSFXInstance* raw_instance = memnew(AudioEffectJSFXInstance(
       self, std::move(processor), downsample_factor_, force_mono_));
+  ensure_ram_pool_pump();
   Ref<AudioEffectInstance> instance(raw_instance);
 
   // A resource may have been modified before it was added to a bus; make sure

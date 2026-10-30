@@ -26,6 +26,9 @@ namespace jsfx_godot {
 
 class AudioEffectJSFXInstance;
 
+/// Disconnects the per-frame EEL2 memory-pool refill and frees the pool.
+void shutdown_ram_pool();
+
 /// Godot resource wrapping one `.jsfx` file.
 ///
 /// `script_path` is loaded and parsed on the main thread. Each bus instantiation
@@ -63,6 +66,11 @@ class AudioEffectJSFX : public godot::AudioEffect {
   /// Editor-only file watching; exported games can call reload_script().
   void set_auto_reload(bool enabled);
   bool get_auto_reload() const;
+
+  /// Web builds: pre-zeroed EEL2 memory blocks (512 KiB each) kept ready for
+  /// scripts that touch new memory while playing. See README "Memory".
+  static void set_memory_pool_blocks(int blocks);
+  static int get_memory_pool_blocks();
 
   godot::Ref<godot::AudioEffectInstance> _instantiate() override;
 

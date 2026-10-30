@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "jsfx/processor.h"
+#include "jsfx/ram_pool.h"
 
 using Catch::Approx;
 
@@ -424,4 +425,67 @@ TEST_CASE("processor flushes denormals", "[processor]") {
   created.value()->process(block.data(), block.data(), 4096);
   CHECK(block[4095].left == 0.0f);
   CHECK(std::fpclassify(block[1100].left) != FP_SUBNORMAL);
+}
+
+TEST_CASE("on-demand EEL2 memory never allocates on the audio thread",
+          "[processor][memory]") {
+  // Desktop builds normally map an OS region; turn that off to exercise the
+  // Web path (blocks allocated on first touch, from the pool in process()).
+  namespace pool = jsfx::ram_pool;
+  pool::set_os_mapping_enabled(false);
+  struct Restore {
+    ~Restore() {
+      jsfx::ram_pool::set_os_mapping_enabled(true);
+      jsfx::ram_pool::set_target_blocks(0);
+      jsfx::ram_pool::release_all();
+    }
+  } restore;
+
+  // Block 0 is touched in @init (main thread, plain calloc); block 9 first in
+  // @sample, which must come from the pool.
+  const std::string script =
+      "@init\n"
+      "buf[0] = 0.25;\n"
+      "@sample\n"
+      "buf[9 * 65536] += 1;\n"
+      "spl0 = buf[0] + buf[9 * 65536];\n";
+
+  SECTION("touched blocks come from the pool") {
+    auto created = jsfx::JsfxProcessor::create(script, make_environment());
+    REQUIRE(created.ok());
+    REQUIRE(pool::target_blocks() >= 1);
+    const std::size_t before = pool::available();
+    REQUIRE(before == static_cast<std::size_t>(pool::target_blocks()));
+    const std::uint64_t misses = pool::misses();
+
+    CHECK(process_one(*created.value(), 0.0f, 0.0f).left == Approx(1.25));
+    CHECK(process_one(*created.value(), 0.0f, 0.0f).left == Approx(2.25));
+    CHECK(pool::available() == before - 1);
+    CHECK(pool::misses() == misses);
+
+    pool::refill();
+    CHECK(pool::available() == before);
+  }
+
+  SECTION("an empty pool degrades to EEL2's failure slot, then recovers") {
+    auto created = jsfx::JsfxProcessor::create(script, make_environment());
+    REQUIRE(created.ok());
+    pool::release_all();
+    const std::uint64_t misses = pool::misses();
+    process_one(*created.value(), 0.0f, 0.0f);
+    CHECK(pool::misses() > misses);
+
+    pool::refill();
+    process_one(*created.value(), 0.0f, 0.0f);  // block now attached
+    CHECK(process_one(*created.value(), 0.0f, 0.0f).left == Approx(2.25));
+  }
+
+  SECTION("an idle effect costs only the blocks its script touched") {
+    auto created = jsfx::JsfxProcessor::create(
+        "@sample\nspl0 *= 0.5;\n", make_environment());
+    REQUIRE(created.ok());
+    const std::size_t before = pool::available();
+    process_one(*created.value(), 1.0f, 1.0f);
+    CHECK(pool::available() == before);
+  }
 }

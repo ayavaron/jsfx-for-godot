@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "jsfx/eel2_context.h"
+#include "jsfx/ram_pool.h"
 
 #if defined(__SSE2__) || defined(_M_X64) || defined(__x86_64__) ||     (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
 #include <xmmintrin.h>
@@ -173,6 +174,8 @@ void JsfxProcessor::process(const AudioFrame* input, AudioFrame* output,
   }
 
   [[maybe_unused]] const ScopedFlushDenormals flush_denormals;
+  // EEL2 memory first touched here comes from the pool, never from calloc.
+  [[maybe_unused]] const ram_pool::ScopedRealtime realtime;
 
   if (impl_->sliders_dirty) {
     for (int index = 1; index <= JsfxDocument::kMaxSliders; ++index) {
