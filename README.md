@@ -12,6 +12,11 @@ instruments you send MIDI notes to from GDScript. Each JSFX slider becomes a
 Godot property, so you can automate it with `Tween`, `AnimationPlayer` or one
 line of GDScript.
 
+**[Play the live demo](https://ayavaron.github.io/jsfx-for-godot/)**: a JSFX
+synth and two JSFX effects running in a Godot Web export in your browser.
+It is about a 54 MB download, almost all of it Godot's engine, and has been
+tested in Chrome.
+
 ```gdscript
 var lowpass := load("res://effects/lowpass.jsfx") as AudioEffectJSFX
 AudioServer.add_bus_effect(AudioServer.get_bus_index("Music"), lowpass)
@@ -133,8 +138,15 @@ Each `play()` runs its own copy of the script with silent input; MIDI sent to
 Delivery is therefore quantized to Godot's mix block (about 5–10 ms), which
 is fine for gameplay and generated music but too coarse for playing back a
 recorded MIDI performance with exact timing. Polyphony is the script's job:
-JSFX synths manage their own voices. `synth_demo.tscn` in the demo project is
-a playable example (keys A–K, mouse for filter and pitch bend).
+JSFX synths manage their own voices. The demo project's main scene is a
+playable example.
+
+On Web, Godot 4.3 and later play streams that can be sampled (WAV, Ogg, MP3)
+directly through Web Audio by default, which skips the bus effects. For JSFX
+bus effects to hear those sounds, set the player's `playback_type` to
+`Stream`, or set the project setting `audio/general/default_playback_type.web`.
+`AudioStreamJSFX` always mixes through Godot, so its warning about streams
+that "cannot be sampled" is harmless; setting `Stream` silences it.
 
 A synth has to be an `AudioStreamJSFX`, not a bus effect. Godot discards the
 output of effects on a bus that nothing is playing into, so a synth on an
@@ -150,6 +162,12 @@ with named and log sliders. `effects/tremolo.jsfx` uses an enum slider and
 imports a shared `lib/lfo.jsfx-inc`. `instruments/simple_synth.jsfx` is an
 8-voice synth with an envelope and filter that responds to notes, the mod
 wheel and pitch bend.
+
+The demo's main scene, `playground/playground.tscn`, plays that synth through
+the tremolo and lowpass on its own bus. You can play it with the mouse, touch
+or the computer keyboard (A W S E D F T G Y H U J K O L P ;, Z/X for octave),
+and it has a built-in arpeggiator. Every control is generated from the
+effect's `get_property_list()`. It runs on desktop and as a Web export.
 
 ### Using REAPER's effects
 
@@ -336,7 +354,7 @@ Linux/macOS: `cmake -S . -B build/godot -G Ninja -DCMAKE_BUILD_TYPE=Release
 | Smoke | Registration, loader, properties, serialization, hot reload, teardown | `godot --headless --path demo --script res://tests/extension_smoke.gd` |
 | GUT (9 tests) | Property hints and serialization, imports, threaded loading, Tween automation, parameter-burst stress, the instrument MIDI API | `tools/fetch_gut.ps1`, then `godot --headless --path demo -s addons/gut/gut_cmdln.gd -gdir=res://tests/unit -gexit` |
 | Audio probe | Real audio: output accuracy, 400+ hot reloads while playing, downsampled `srate`, a synth playing and releasing notes, `midisend` reaching `midi_sent`, 17 live instances | `godot --headless --audio-driver WASAPI --path demo --script res://tests/audio_probe.gd` |
-| Browser | Web exports, both threading modes, in Chrome; `?instances=N` plus `--settle-ms` reports the WebAssembly heap, `?synth=1` plays a chord and reports its level | `tools/serve_web.py` + `tools/browser_smoke.py` |
+| Browser | Web exports, both threading modes, in Chrome; `--playground` clicks start and holds a key in the playable demo until the synth sounds; `?smoke=1` runs the test harness, where `?instances=N` plus `--settle-ms` reports the WebAssembly heap and `?synth=1` plays a chord and reports its level | `tools/serve_web.py` + `tools/browser_smoke.py` |
 | Corpus bench | Every `.jsfx` you point it at: compatibility, CPU, memory (`--no-os-mapping` measures the Web memory path) | `jsfx_bench --import-dir <Effects> <files...>` |
 
 Import the demo once before running the Godot suites:

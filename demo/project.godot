@@ -6,9 +6,15 @@ config_version=5
 [application]
 
 config/name="JSFX for Godot Demo"
-run/main_scene="res://main.tscn"
+run/main_scene="res://playground/playground.tscn"
 
 [display]
 
-window/size/viewport_width=640
-window/size/viewport_height=360
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[rendering]
+
+environment/defaults/default_clear_color=Color(0.07, 0.08, 0.11, 1)

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Load the exported Godot Web build in a real browser and wait for markers.
 
-The demo prints JSFX_WEB_READY after setup and JSFX_WEB_PROCESSED once the
-JSFX effect has processed audio frames. Requires:
+With ?smoke=1 in the URL the demo opens its test harness, which prints
+JSFX_WEB_READY after setup and JSFX_WEB_PROCESSED once the JSFX effect has
+processed audio frames. With --playground the script opens the playable demo
+instead, clicks "start audio", holds a key and waits for the synth to sound. Requires:
 
     python -m pip install playwright
 
@@ -10,8 +12,9 @@ This uses an installed Chrome/Edge via executable_path, so no browser download
 is required.
 
 Usage:
-    python tools/browser_smoke.py --url http://127.0.0.1:8060/index.html
-    python tools/browser_smoke.py --url http://127.0.0.1:8061/index.html --threads
+    python tools/browser_smoke.py --url "http://127.0.0.1:8060/index.html?smoke=1"
+    python tools/browser_smoke.py --url "http://127.0.0.1:8061/index.html?smoke=1" --threads
+    python tools/browser_smoke.py --url http://127.0.0.1:8060/index.html --playground
 """
 
 import argparse
@@ -51,6 +54,8 @@ def main():
     parser.add_argument("--executable", default=None,
                         help="Chrome/Edge executable; defaults are tried")
     parser.add_argument("--screenshot", default="")
+    parser.add_argument("--playground", action="store_true",
+                        help="Play a note in the playable demo instead")
     parser.add_argument("--settle-ms", type=int, default=0,
                         help="Keep audio running this long before measuring")
     args = parser.parse_args()
@@ -143,11 +148,28 @@ def main():
         except Exception:
             pass
 
-        ready = wait_for_log(page, logs, "JSFX_WEB_READY", args.timeout_ms)
-        # A click after startup is what resumes a suspended Web Audio context
-        # in Godot's Web driver.
-        processed = wait_for_log(page, logs, "JSFX_WEB_PROCESSED=",
-                                 args.timeout_ms, click_canvas=True)
+        if args.playground:
+            ready = wait_for_log(page, logs, "JSFX_PLAYGROUND_READY",
+                                 args.timeout_ms)
+            page.wait_for_timeout(500)
+            # The centre of the canvas is the "start audio" button; then hold
+            # A (C3) on the computer keyboard.
+            box = page.locator("canvas").bounding_box()
+            page.mouse.click(box["x"] + box["width"] / 2,
+                             box["y"] + box["height"] / 2)
+            page.wait_for_timeout(300)
+            page.keyboard.down("a")
+            processed = wait_for_log(page, logs, "JSFX_PLAYGROUND_SOUND",
+                                     args.timeout_ms)
+            if args.screenshot:
+                page.screenshot(path=args.screenshot)
+            page.keyboard.up("a")
+        else:
+            ready = wait_for_log(page, logs, "JSFX_WEB_READY", args.timeout_ms)
+            # A click after startup is what resumes a suspended Web Audio
+            # context in Godot's Web driver.
+            processed = wait_for_log(page, logs, "JSFX_WEB_PROCESSED=",
+                                     args.timeout_ms, click_canvas=True)
 
         if args.settle_ms > 0:
             page.wait_for_timeout(args.settle_ms)
@@ -184,7 +206,7 @@ def main():
         if processed:
             print(f"PROCESSED_LINE={processed}")
 
-        if args.screenshot:
+        if args.screenshot and not args.playground:
             try:
                 page.screenshot(path=args.screenshot)
                 print(f"SCREENSHOT={args.screenshot}")

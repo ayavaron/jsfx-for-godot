@@ -1,6 +1,6 @@
 extends Node
 
-# Web + desktop smoke demo:
+# Web + desktop smoke harness (browser_smoke.py opens it with ?smoke=1):
 #   - the Master bus runs a JSFX gain effect,
 #   - a generated 220 Hz tone is played through it,
 #   - a Tween automates the generated `slider_1_gain` property.
@@ -36,6 +36,7 @@ func _ready() -> void:
 	generator.buffer_length = 0.2
 	_player = AudioStreamPlayer.new()
 	_player.stream = generator
+	_player.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
 	add_child(_player)
 
 	if not OS.has_feature("web"):
@@ -71,6 +72,7 @@ func _ready() -> void:
 		var synth_player := AudioStreamPlayer.new()
 		synth_player.stream = stream
 		synth_player.bus = "Synth"
+		synth_player.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
 		add_child(synth_player)
 		synth_player.play()
 
