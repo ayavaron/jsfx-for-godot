@@ -1,0 +1,340 @@
+desc: Gemini Unreal Piano (GUP) v7
+// Vibe-coded by Aya, a musician and REAPER enthusiast. MIT license (see LICENSE).
+author: Gemini
+version: 7.0
+// Tags: instrument, synth, piano, hybrid, vis
+
+slider1:0.18<0,1>Master Output
+slider2:0.5<0,1>Tone (Dark <-> Bright)
+slider3:0.3<-1,1>Vel -> Tone Amount
+slider4:2.0<0.5,5>Decay Length
+slider5:0.5<0.1,2>Release Time
+slider6:0.0<0,1>Unrealism (Stability Break)
+
+slider10:0.5<0,1>Mix: Morph Osc
+slider11:0.5<0,1>Mix: FM Synth
+slider12:0.5<0,1>Mix: Karplus-Strong
+slider13:0.35<0,1>Mix: Additive
+
+slider20:0.0<-1,1>Pan: Morph
+slider21:-0.2<-1,1>Pan: FM
+slider22:0.2<-1,1>Pan: Karplus
+slider23:0.0<-1,1>Pan: Additive
+
+slider30:1<0,4,1{Off (Layered),Sequential,Reverse,Skip-1,Skip-2}>Round Robin Mode
+
+in_pin:none
+out_pin:left output
+out_pin:right output
+
+@init
+MAX_VOICES = 16;
+SR_INV = 1 / srate;
+
+v_active = 0;
+v_note = 16;
+v_vel = 32;
+v_phase = 48;
+v_env_amp = 64;
+v_env_state = 80;
+v_engine = 96;
+v_decay_base = 112; // Changed from rate to base factor
+v_lp_state = 128; 
+
+dc_l = 0; dc_r = 0;
+KS_MAX_DELAY = 4096;
+ks_buffer_start = 6000; 
+
+rr_global_counter = 0;
+vu_morph = 0; vu_fm = 0; vu_ks = 0; vu_add = 0;
+
+i = 0;
+loop(MAX_VOICES, v_active[i] = 0; i += 1;);
+
+function get_freq(n) ( 440 * 2 ^ ((n - 69) / 12); );
+function tanh_clip(x) ( x < -3 ? -1 : (x > 3 ? 1 : atan(x)); );
+function pan_L(p) ( sqrt(0.5 - p * 0.5); );
+function pan_R(p) ( sqrt(0.5 + p * 0.5); );
+
+@slider
+master_gain = slider1;
+param_tone = slider2;         
+param_vel_tone = slider3;     
+param_decay_mult = slider4;
+param_rel = slider5; // Used directly in sample for real-time update
+param_unreal = slider6; 
+
+vol_morph = slider10;
+vol_fm = slider11;
+vol_ks = slider12;
+vol_add = slider13;
+
+pan1_L = pan_L(slider20); pan1_R = pan_R(slider20);
+pan2_L = pan_L(slider21); pan2_R = pan_R(slider21);
+pan3_L = pan_L(slider22); pan3_R = pan_R(slider22);
+pan4_L = pan_L(slider23); pan4_R = pan_R(slider23);
+
+rr_mode = slider30;
+
+@block
+while (midirecv(offset, msg1, msg2, msg3)) (
+    status = msg1 & 0xF0;
+    note = msg2;
+    vel = msg3;
+
+    status == 0x90 && vel > 0 ? (
+        found_voice = -1;
+        i = 0;
+        while (i < MAX_VOICES && found_voice == -1) (
+            v_active[i] == 0 ? found_voice = i;
+            i += 1;
+        );
+        found_voice == -1 ? found_voice = 0; 
+
+        v_active[found_voice] = 1;
+        v_note[found_voice] = note;
+        v_vel[found_voice] = vel / 127;
+        v_phase[found_voice] = 0; 
+        
+        v_env_amp[found_voice] = 0; 
+        v_env_state[found_voice] = 1; 
+        v_lp_state[found_voice] = 0;
+
+        // Store BASE decay factor (Physics only), apply slider later
+        // This allows real-time slider tweaks to work
+        v_decay_base[found_voice] = (0.00005 * (1.0 + (note / 30.0)));
+
+        rr_mode == 0 ? (
+            v_engine[found_voice] = 0; 
+        ) : (
+            step = 1;
+            rr_mode == 2 ? step = -1; 
+            rr_mode == 3 ? step = 2;  
+            rr_mode == 4 ? step = 3;  
+            
+            rr_global_counter += step;
+            engine_sel = (rr_global_counter % 4);
+            engine_sel < 0 ? engine_sel += 4;
+            v_engine[found_voice] = engine_sel + 1;
+        );
+
+        freq = get_freq(note);
+        delay_len = srate / freq;
+        ks_ptr = ks_buffer_start + (found_voice * KS_MAX_DELAY);
+        k = 0;
+        loop(min(delay_len, 200), 
+            win = 1; k < 10 ? win = k/10; 
+            mem[ks_ptr + k] = ((rand(2) - 1) * win) * v_vel[found_voice] * 0.5;
+            k += 1;
+        );
+    );
+
+    status == 0x80 || (status == 0x90 && vel == 0) ? (
+        i = 0;
+        loop(MAX_VOICES,
+            v_active[i] == 1 && v_note[i] == note ? v_env_state[i] = 3;
+            i += 1;
+        );
+    );
+    midisend(offset, msg1, msg2, msg3);
+);
+
+@sample
+out_l = 0; out_r = 0;
+sum_morph = 0; sum_fm = 0; sum_ks = 0; sum_add = 0;
+
+i = 0;
+loop(MAX_VOICES,
+    v_active[i] ? (
+        freq = get_freq(v_note[i]);
+        v_phase[i] += (freq * SR_INV);
+        v_phase[i] -= floor(v_phase[i]);
+        ph = v_phase[i] * 2 * $pi;
+
+        // --- ENVELOPE LOGIC ---
+        // State 1: Attack
+        v_env_state[i] == 1 ? (
+            v_env_amp[i] += 0.1; 
+            v_env_amp[i] >= 1.0 ? ( v_env_amp[i] = 1.0; v_env_state[i] = 2; );
+        );
+        
+        // State 2: Decay
+        v_env_state[i] == 2 ? (
+            // Apply Slider 4 in real-time here:
+            current_decay = v_decay_base[i] / param_decay_mult;
+            v_env_amp[i] *= (1 - current_decay);
+            v_env_amp[i] < 0.001 ? v_active[i] = 0; 
+        );
+        
+        // State 3: Release
+        v_env_state[i] == 3 ? (
+            // Apply Slider 5 in real-time here:
+            // Release curve: 0.1 (Fast) -> 2.0 (Slow)
+            rel_factor = 0.005 + (0.05 / param_rel); 
+            v_env_amp[i] *= (1 - rel_factor); 
+            v_env_amp[i] < 0.001 ? v_active[i] = 0;
+        );
+        
+        // Final Gain for this voice (Envelope * Velocity)
+        voice_amp = v_env_amp[i] * v_vel[i];
+        
+        eng = v_engine[i];
+        curr_tone = param_tone + (v_vel[i] * param_vel_tone);
+        curr_tone = max(0, min(1, curr_tone));
+
+        // 1. Morph Osc
+        (eng == 0 || eng == 1) ? (
+            osc_sin = sin(ph);
+            osc_saw = (v_phase[i] * 2) - 1; 
+            osc_sqr = osc_saw > 0 ? 0.5 : -0.5; 
+            m_amt = v_vel[i] * v_vel[i] * v_vel[i];
+            
+            raw = osc_sin * (1 - m_amt) + (osc_saw * (1-param_unreal) + osc_sqr * param_unreal) * m_amt;
+            cutoff_t = 0.005 + (curr_tone * curr_tone * 0.995);
+            v_lp_state[i] += cutoff_t * (raw - v_lp_state[i]);
+            
+            // APPLY ENVELOPE (VCA)
+            sig = v_lp_state[i] * vol_morph * voice_amp;
+            
+            sum_morph += abs(sig);
+            out_l += sig * pan1_L; out_r += sig * pan1_R;
+        );
+
+        // 2. FM Synth
+        (eng == 0 || eng == 2) ? (
+            // Mod Index uses Envelope
+            mod_idx = (2.5 * curr_tone) * voice_amp; 
+            ratio = 2.0 + (param_unreal * 0.41);
+            modulator = sin(ph * ratio) * mod_idx;
+            
+            // Output uses Envelope (VCA) - FIXED
+            sig = sin(ph + modulator) * vol_fm * voice_amp;
+            
+            sum_fm += abs(sig);
+            out_l += sig * pan2_L; out_r += sig * pan2_R;
+        );
+
+        // 3. Karplus Strong
+        (eng == 0 || eng == 3) ? (
+            delay_len = srate / freq;
+            ks_base = ks_buffer_start + (i * KS_MAX_DELAY);
+            idx = floor(v_phase[i] * delay_len);
+            val = mem[ks_base + idx];
+            prev = mem[ks_base + ((idx - 1 + delay_len) % delay_len)];
+            
+            base_damp = 0.35 + (curr_tone * 0.149);
+            unreal_damp = base_damp + (param_unreal * 0.008); 
+            new_val = tanh_clip((val + prev) * unreal_damp);
+            mem[ks_base + idx] = new_val;
+            
+            // APPLY ENVELOPE (VCA) - FIXED
+            // Now Decay/Release sliders will fade the string out
+            sig = new_val * vol_ks * 3.0 * voice_amp; 
+            
+            sum_ks += abs(sig);
+            out_l += sig * pan3_L; out_r += sig * pan3_R;
+        );
+
+        // 4. Additive
+        (eng == 0 || eng == 4) ? (
+            h1 = sin(ph);
+            h_scale = curr_tone * curr_tone; 
+            stretch = 1.0 + (param_unreal * 0.1);
+            h2 = sin(ph * 2.02 * stretch) * 0.25 * h_scale;
+            h3 = sin(ph * 3.05 * stretch) * 0.12 * h_scale;
+            
+            // APPLY ENVELOPE (VCA) - FIXED
+            sig = (h1 + h2 + h3) * vol_add * 0.8 * voice_amp; 
+            
+            sum_add += abs(sig);
+            out_l += sig * pan4_L; out_r += sig * pan4_R;
+        );
+    );
+    i += 1;
+);
+
+vu_morph = max(vu_morph * 0.95, sum_morph);
+vu_fm = max(vu_fm * 0.95, sum_fm);
+vu_ks = max(vu_ks * 0.95, sum_ks);
+vu_add = max(vu_add * 0.95, sum_add);
+
+out_l = tanh_clip(out_l * master_gain);
+out_r = tanh_clip(out_r * master_gain);
+
+out_l = out_l - dc_l + 0.995 * dc_l; dc_l = out_l;
+out_r = out_r - dc_r + 0.995 * dc_r; dc_r = out_r;
+
+spl0 = out_l; spl1 = out_r;
+
+@gfx 400 300
+gfx_set(0.1, 0.1, 0.1, 1);
+gfx_rect(0, 0, gfx_w, gfx_h);
+gfx_setfont(1, "Arial", 14);
+pad = 20;
+
+gfx_set(1,1,1,1);
+gfx_x = pad; gfx_y = pad;
+gfx_drawstr("GEMINI UNREAL PIANO v7");
+
+gfx_y += 30;
+gfx_x = pad;
+i = 0;
+loop(MAX_VOICES,
+    gfx_x = pad + (i * 18);
+    v_active[i] ? (
+        e = v_engine[i];
+        e==0 ? gfx_set(1,1,1,1); 
+        e==1 ? gfx_set(1,0.5,0.5,1); 
+        e==2 ? gfx_set(0.5,1,0.5,1); 
+        e==3 ? gfx_set(0.5,0.5,1,1); 
+        e==4 ? gfx_set(1,1,0.5,1); 
+    ) : (
+        gfx_set(0.3,0.3,0.3,1); 
+    );
+    gfx_rect(gfx_x, gfx_y, 14, 14);
+    i += 1;
+);
+
+gfx_set(1,1,1,0.8);
+gfx_x = pad; gfx_y += 30;
+act = 0; c_m=0; c_f=0; c_k=0; c_a=0;
+i=0;
+loop(MAX_VOICES, 
+    v_active[i] ? (
+        act+=1;
+        e = v_engine[i];
+        (e==0||e==1)?c_m+=1;
+        (e==0||e==2)?c_f+=1;
+        (e==0||e==3)?c_k+=1;
+        (e==0||e==4)?c_a+=1;
+    );
+    i+=1;
+);
+gfx_printf("Polyphony: %d / 16", act);
+
+function draw_meter(label, val, x, y, r, g, b) (
+    gfx_x = x; gfx_y = y;
+    gfx_set(r,g,b,1);
+    gfx_drawstr(label);
+    gfx_set(0.2,0.2,0.2,1);
+    gfx_rect(x + 90, y, 180, 14); 
+    gfx_set(r,g,b,1);
+    width = min(180, val * 180);
+    gfx_rect(x + 90, y, width, 14);
+    gfx_x = x + 280;
+    gfx_printf("[%d v]", c_val); 
+);
+
+y_base = 120;
+c_val = c_m; draw_meter("MORPH OSC", vu_morph, pad, y_base, 1, 0.5, 0.5);
+c_val = c_f; draw_meter("FM SYNTH", vu_fm, pad, y_base+30, 0.5, 1, 0.5);
+c_val = c_k; draw_meter("KARPLUS", vu_ks, pad, y_base+60, 0.5, 0.5, 1);
+c_val = c_a; draw_meter("ADDITIVE", vu_add, pad, y_base+90, 1, 1, 0.5);
+
+gfx_set(1,1,1,0.5);
+gfx_x = pad; gfx_y = y_base + 140;
+gfx_drawstr("Tone: ");
+gfx_rect(pad + 50, gfx_y, 100 * slider2, 10);
+gfx_x = pad + 200;
+gfx_drawstr("Unreal: ");
+gfx_rect(pad + 260, gfx_y, 100 * slider6, 10);

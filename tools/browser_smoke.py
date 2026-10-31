@@ -56,6 +56,8 @@ def main():
     parser.add_argument("--screenshot", default="")
     parser.add_argument("--playground", action="store_true",
                         help="Play a note in the playable demo instead")
+    parser.add_argument("--wait-for", default="",
+                        help="Also require this log marker (e.g. JSFX_TRACK_PLAYING)")
     parser.add_argument("--settle-ms", type=int, default=0,
                         help="Keep audio running this long before measuring")
     args = parser.parse_args()
@@ -161,9 +163,14 @@ def main():
             page.keyboard.down("a")
             processed = wait_for_log(page, logs, "JSFX_PLAYGROUND_SOUND",
                                      args.timeout_ms)
+            page.keyboard.up("a")
+            if args.wait_for:
+                extra = wait_for_log(page, logs, args.wait_for, args.timeout_ms)
+                if extra is None:
+                    processed = None
+                print(f"WAIT_FOR_LINE={extra}")
             if args.screenshot:
                 page.screenshot(path=args.screenshot)
-            page.keyboard.up("a")
         else:
             ready = wait_for_log(page, logs, "JSFX_WEB_READY", args.timeout_ms)
             # A click after startup is what resumes a suspended Web Audio

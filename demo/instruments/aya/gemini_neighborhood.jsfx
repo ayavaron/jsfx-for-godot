@@ -1,0 +1,247 @@
+desc: Gemini Neighborhood v5 (Physics Driver)
+// Vibe-coded by Aya, a musician and REAPER enthusiast. MIT license (see LICENSE).
+author: Gemini
+
+slider1:0<0,100,0.01>Manual Position (Center)
+slider2:100<0,100,1>Street Width
+slider3:15<1,50,1>Object Size (Resonance)
+slider4:50<0,100,1>Loose Parts (Click Density)
+slider5:0.5<0,1,0.01>Doppler Intensity
+slider6:20<0,100,1>Material Tension (FM)
+slider7:0.0<-24,24,0.1>Rattle Output Gain
+slider8:0<0,0.08,0.001>Auto-Drive Speed (Hz)
+slider9:20<0,100,1>Auto-Drive Depth (Houses)
+
+slider10:0<0,100,1>Drive: Contact Mod (Buzz)
+slider11:0<0,100,1>Drive: Transient Rattle
+slider12:0<0,100,1>Drive: Harmonic Inject
+
+slider13:50<0,100,1>Dry/Wet Mix (%)
+
+@init
+MAX_MODES = 6;
+PI = 3.14159265359;
+
+// Inharmonic Ratios
+ratio_0 = 1.0;
+ratio_1 = 2.3;
+ratio_2 = 3.4;
+ratio_3 = 4.1;
+ratio_4 = 5.7;
+ratio_5 = 7.1;
+
+function hash(n) (
+  n = sin(n * 12.9898) * 43758.5453;
+  abs(n - floor(n));
+);
+
+function calc_coeffs(bank_idx, seed_idx, base_freq_knob, doppler_pitch, tension_mod) (
+  rand_size = hash(seed_idx); 
+  rand_mat  = hash(seed_idx + 100);
+  
+  h_freq = base_freq_knob * (0.8 + (rand_size * 0.5));
+  h_freq = h_freq * doppler_pitch * (1.0 + tension_mod);
+  h_freq = max(50, min(h_freq, 6000));
+  
+  res_q = 8 + (rand_mat * 15); 
+  
+  m = 0;
+  loop(MAX_MODES,
+    r = 1.0;
+    (m==0) ? r = ratio_0;
+    (m==1) ? r = ratio_1;
+    (m==2) ? r = ratio_2;
+    (m==3) ? r = ratio_3;
+    (m==4) ? r = ratio_4;
+    (m==5) ? r = ratio_5;
+    
+    mf = h_freq * r;
+    mf = min(mf, srate * 0.49);
+    
+    w0 = 2 * PI * mf / srate;
+    alpha = sin(w0) / (2 * res_q);
+    norm = 1 / (1 + alpha);
+    
+    c_off = 1000 + (bank_idx * 100) + (m * 5);
+    mem[c_off+0] = alpha * norm;      
+    mem[c_off+1] = 0;                 
+    mem[c_off+2] = -alpha * norm;     
+    mem[c_off+3] = -2 * cos(w0) * norm; 
+    mem[c_off+4] = (1 - alpha) * norm;  
+    
+    m += 1;
+  );
+);
+
+curr_pos = slider1;
+curr_A_id = -1;
+curr_B_id = -1;
+envelope = 0;
+lfo_accum = 0;
+last_env = 0;
+
+@block
+// --- AUTO DRIVE ---
+lfo_hz = slider8;
+lfo_depth = slider9;
+
+(lfo_hz > 0.0001) ? (
+  lfo_inc = lfo_hz * (samplesblock / srate);
+  lfo_accum += lfo_inc;
+  lfo_accum -= floor(lfo_accum);
+  tri_val = (lfo_accum < 0.5) ? (lfo_accum * 2.0) : (2.0 - (lfo_accum * 2.0));
+  target_pos = slider1 + (tri_val * lfo_depth);
+) : (
+  target_pos = slider1;
+);
+
+// --- PHYSICS MOVEMENT ---
+max_speed = 0.15; 
+diff = target_pos - curr_pos;
+diff = max(-max_speed, min(diff, max_speed));
+curr_pos += diff;
+doppler_shift = 1.0 + (diff * slider5 * 4.0); 
+
+// --- PARAMS ---
+width_fact = slider2 / 100;
+rattle_out_gain = 10^(slider7/20);
+
+// Driver Params
+contact_amt = slider10 / 100;
+transient_amt = slider11 / 100;
+inject_amt = slider12 / 100;
+mix_pct = slider13 / 100;
+
+click_thresh_base = 1.0 - (slider4 / 105); 
+tension_amt = slider6 / 1000;
+
+// --- HOUSE LOGIC ---
+idx_floor = floor(curr_pos);
+fade = curr_pos - idx_floor;
+
+(idx_floor % 2 == 0) ? (
+  id_A = idx_floor; id_B = idx_floor + 1;
+  vol_A = cos(fade * PI * 0.5); vol_B = sin(fade * PI * 0.5); 
+) : (
+  id_B = idx_floor; id_A = idx_floor + 1;
+  vol_B = cos(fade * PI * 0.5); vol_A = sin(fade * PI * 0.5);
+);
+
+(id_A != curr_A_id) ? (
+  curr_A_id = id_A;
+  memset(0, 0, 100); 
+  pan_A = (hash(curr_A_id + 50) * 2.0) - 1.0; 
+);
+(id_B != curr_B_id) ? (
+  curr_B_id = id_B;
+  memset(100, 0, 100); 
+  pan_B = (hash(curr_B_id + 50) * 2.0) - 1.0;
+);
+
+(vol_A > 0.001) ? calc_coeffs(0, curr_A_id, slider3 * 10, doppler_shift, tension_amt);
+(vol_B > 0.001) ? calc_coeffs(1, curr_B_id, slider3 * 10, doppler_shift, tension_amt);
+
+pA = pan_A * width_fact;
+pB = pan_B * width_fact;
+
+@sample
+in_sig = (spl0 + spl1) * 0.5;
+
+// --- 1. HARMONIC INJECTION ---
+// Create a "Detector Signal" that is dirtier than the input
+detect_sig = in_sig;
+(inject_amt > 0) ? (
+  // Hard clipping to create square edges from sine
+  drive_sig = in_sig * (1.0 + inject_amt * 10.0);
+  detect_sig = max(-0.5, min(drive_sig, 0.5));
+);
+
+// --- 2. ENVELOPE FOLLOWER ---
+in_abs = abs(detect_sig);
+envelope = (in_abs > envelope) ? (envelope*0.5 + in_abs*0.5) : (envelope*0.99 + in_abs*0.01);
+
+// --- 3. TRANSIENT DETECTION (Slew) ---
+delta_env = max(0, envelope - last_env); // Only positive changes (attacks)
+last_env = envelope;
+// If Transient Rattle is up, we boost probability based on Delta
+transient_boost = delta_env * transient_amt * 200.0; 
+
+// --- 4. CLICK GENERATOR ---
+impulse = 0;
+// Calculate dynamic threshold
+// If Contact Mod is High, we modulate threshold by the waveform cycle
+// 0% Contact = Random White Noise 
+// 100% Contact = Clicks happen only at peaks of detecting signal
+mod_factor = (contact_amt > 0) ? ((1.0 - contact_amt) + (in_abs * contact_amt)) : 1.0;
+
+// Combine standard threshold with transient boost
+final_thresh = click_thresh_base - transient_boost;
+
+// Roll the dice
+(rand(1.0) * mod_factor > final_thresh) ? (
+   // Scale impulse by envelope (so silence is silent)
+   impulse = (rand(2.0)-1.0) * envelope;
+   
+   // If transient driven, boost impulse gain for impact
+   impulse *= (1.0 + transient_boost * 0.5);
+);
+
+// --- 5. FILTER BANK A ---
+out_A = 0;
+(vol_A > 0.001) ? (
+  m = 0;
+  loop(MAX_MODES,
+    c_idx = 1000 + (m*5);
+    s_idx = 0 + (m*4);
+    
+    x1 = mem[s_idx+0]; x2 = mem[s_idx+1];
+    y1 = mem[s_idx+2]; y2 = mem[s_idx+3];
+    
+    val = (mem[c_idx] * impulse) + (mem[c_idx+2] * x2) - (mem[c_idx+3] * y1) - (mem[c_idx+4] * y2);
+    
+    mem[s_idx+1] = x1; mem[s_idx+0] = impulse;
+    mem[s_idx+3] = y1; mem[s_idx+2] = val;
+    
+    out_A += val;
+    m += 1;
+  );
+);
+
+// --- 6. FILTER BANK B ---
+out_B = 0;
+(vol_B > 0.001) ? (
+  m = 0;
+  loop(MAX_MODES,
+    c_idx = 1100 + (m*5);
+    s_idx = 100 + (m*4);
+    
+    x1 = mem[s_idx+0]; x2 = mem[s_idx+1];
+    y1 = mem[s_idx+2]; y2 = mem[s_idx+3];
+    
+    val = (mem[c_idx] * impulse) + (mem[c_idx+2] * x2) - (mem[c_idx+3] * y1) - (mem[c_idx+4] * y2);
+    
+    mem[s_idx+1] = x1; mem[s_idx+0] = impulse;
+    mem[s_idx+3] = y1; mem[s_idx+2] = val;
+    
+    out_B += val;
+    m += 1;
+  );
+);
+
+// --- 7. MIXING ---
+l_A = out_A * (1.0 - pA)*0.5 * vol_A;
+r_A = out_A * (1.0 + pA)*0.5 * vol_A;
+
+l_B = out_B * (1.0 - pB)*0.5 * vol_B;
+r_B = out_B * (1.0 + pB)*0.5 * vol_B;
+
+wet_l = (l_A + l_B) * rattle_out_gain * 8.0; 
+wet_r = (r_A + r_B) * rattle_out_gain * 8.0;
+
+// Dry/Wet Blend
+// mix_pct 0 = only dry, 100 = only wet
+dry_gain = 1.0 - mix_pct;
+wet_gain = mix_pct;
+
+spl0 = (spl0 * dry_gain) + (wet_l * wet_gain);
+spl1 = (spl1 * dry_gain) + (wet_r * wet_gain);

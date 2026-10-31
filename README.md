@@ -12,10 +12,11 @@ instruments you send MIDI notes to from GDScript. Each JSFX slider becomes a
 Godot property, so you can automate it with `Tween`, `AnimationPlayer` or one
 line of GDScript.
 
-**[Play the live demo](https://ayavaron.github.io/jsfx-for-godot/)**: a JSFX
-synth and two JSFX effects running in a Godot Web export in your browser.
-It is about a 54 MB download, almost all of it Godot's engine, and has been
-tested in Chrome.
+**[Play the live demo](https://ayavaron.github.io/jsfx-for-godot/)**: three
+JSFX instruments layered over three JSFX effects in a Godot Web export, with
+Rossini's *Barber of Seville* overture as a demo track to tweak while it
+plays. It is about a 54 MB download, almost all of it Godot's engine, and has
+been tested in Chrome.
 
 ```gdscript
 var lowpass := load("res://effects/lowpass.jsfx") as AudioEffectJSFX
@@ -163,11 +164,26 @@ imports a shared `lib/lfo.jsfx-inc`. `instruments/simple_synth.jsfx` is an
 8-voice synth with an envelope and filter that responds to notes, the mod
 wheel and pitch bend.
 
-The demo's main scene, `playground/playground.tscn`, plays that synth through
-the tremolo and lowpass on its own bus. You can play it with the mouse, touch
-or the computer keyboard (A W S E D F T G Y H U J K O L P ;, Z/X for octave),
-and it has a built-in arpeggiator. Every control is generated from the
-effect's `get_property_list()`. It runs on desktop and as a Web export.
+The demo's main scene, `playground/playground.tscn`, layers three instruments
+(the simple synth and [Aya's](#demo-instruments-by-aya) Unreal Piano and Cicada
+Swarm), each on its own bus with a volume and a lo-fi (`downsample_factor`)
+selector. They feed a mix bus with the tremolo, the lowpass and Aya's
+Neighborhood. Every control is generated from the script's
+`get_property_list()`, one tab per script. Other ways to play:
+
+- the mouse, touch or the computer keyboard (A W S E D F T G Y H U J K O L P ;,
+  Z/X for octave);
+- the arpeggiator;
+- a demo track: Rossini's *Barber of Seville* overture as a MIDI file, read by
+  a small GDScript MIDI parser (`playground/midi_file.gd`). Every part plays on
+  every enabled layer, except the bass drum and cymbals, which only Cicada
+  Swarm plays.
+
+A boid flies around wherever the cursor has been. Click it and it changes a
+random parameter on the visible tab, with a burst of colour and a caption
+naming the change. It's a small argument for treating sound parameters as
+part of game feel. The page shows its FPS, and it runs on desktop and as a
+Web export.
 
 ### Using REAPER's effects
 
@@ -354,7 +370,7 @@ Linux/macOS: `cmake -S . -B build/godot -G Ninja -DCMAKE_BUILD_TYPE=Release
 | Smoke | Registration, loader, properties, serialization, hot reload, teardown | `godot --headless --path demo --script res://tests/extension_smoke.gd` |
 | GUT (9 tests) | Property hints and serialization, imports, threaded loading, Tween automation, parameter-burst stress, the instrument MIDI API | `tools/fetch_gut.ps1`, then `godot --headless --path demo -s addons/gut/gut_cmdln.gd -gdir=res://tests/unit -gexit` |
 | Audio probe | Real audio: output accuracy, 400+ hot reloads while playing, downsampled `srate`, a synth playing and releasing notes, `midisend` reaching `midi_sent`, 17 live instances | `godot --headless --audio-driver WASAPI --path demo --script res://tests/audio_probe.gd` |
-| Browser | Web exports, both threading modes, in Chrome; `--playground` clicks start and holds a key in the playable demo until the synth sounds; `?smoke=1` runs the test harness, where `?instances=N` plus `--settle-ms` reports the WebAssembly heap and `?synth=1` plays a chord and reports its level | `tools/serve_web.py` + `tools/browser_smoke.py` |
+| Browser | Web exports, both threading modes, in Chrome; `--playground` clicks start and holds a key in the playable demo until the synth sounds, and with `?autoplay=1&from=SECONDS` plus `--wait-for JSFX_TRACK_PLAYING` it plays the demo track and reports level and FPS; `?smoke=1` runs the test harness, where `?instances=N` plus `--settle-ms` reports the WebAssembly heap and `?synth=1` plays a chord and reports its level | `tools/serve_web.py` + `tools/browser_smoke.py` |
 | Corpus bench | Every `.jsfx` you point it at: compatibility, CPU, memory (`--no-os-mapping` measures the Web memory path) | `jsfx_bench --import-dir <Effects> <files...>` |
 
 Import the demo once before running the Godot suites:
@@ -382,6 +398,25 @@ Bus effects (`AudioEffectJSFXInstance`) and instruments
 `src/core` and `include/jsfx` hold a Godot-free C++20 library: parser, EEL2
 wrapper, processor and queue. `src/godot` holds the GDExtension bridge.
 `third_party/wdl` is an unmodified subset of Cockos WDL.
+
+## Demo instruments by Aya
+
+The demo's Unreal Piano, Cicada Swarm and Neighborhood
+([`demo/instruments/aya/`](demo/instruments/aya/)) were vibe-coded by Aya, a
+musician and REAPER enthusiast, and are MIT licensed. Her non-AI music is on
+Bandcamp and Spotify: **GWID** for vocal music and **OK I DUNNO** for
+instrumental music.
+
+- **Gemini Unreal Piano**: 16 voices, each mixing a morphing oscillator, FM,
+  Karplus-Strong and additive engines. Its round robin is on by default
+  (Sequential), so successive notes cycle through the four engines.
+- **Cicada Swarm**: 12 voices of noise bursts through resonant "membranes".
+  Voices are not stolen: past 12 held notes, new notes are dropped. Its *Sway
+  Rate* slider reads `play_pos`, which is not a JSFX variable
+  (`play_position` is), so it has no effect, in REAPER too.
+- **Neighborhood**: not an instrument but an effect. It has no MIDI input and
+  rattles in response to the audio passing through it, so the demo puts it
+  on the mix bus.
 
 ## License and credits
 

@@ -1,0 +1,115 @@
+desc: Cicada Swarm v12 (Universal Resonator + Wet/Dry)
+// Vibe-coded by Aya, a musician and REAPER enthusiast. MIT license (see LICENSE).
+
+slider1:0.6<0,1>Swarm Density
+slider2:0.3<0,1>Sway Rate (Wind)
+slider3:0.75<0,1,0.01>Tonality
+slider4:0.5<0,1>Field Position (Swarm Perspective)
+slider5:0.6<0,1>Timbal Snap
+slider6:0.5<0,1>External Input Feed
+slider7:1.0<0,1>External Wet/Dry (0=Dry, 1=Membrane)
+slider10:0.3<0,1>Membrane: Humid Air
+slider11:0.3<0,1>Membrane: Wire Fence 
+slider12:0.6<0,1>Membrane: Ground Roar
+slider13:100<10,2000,10>Attack (ms)
+slider14:10<10,2000,10>Release (ms)
+slider15:-12<-60,0,1>Output Gain (dB)
+
+@init
+MAX_VOICES = 12; mem_size = 10; voices = 0; 
+buf_a = 10000; buf_w = 20000; buf_g = 30000;
+ptr_a = 0; ptr_w = 0; ptr_g = 0;
+fa_l=0; fa_b=0; fw_l=0; fw_b=0; fg_l=0; fg_b=0;
+target_f = 440; current_f = 440;
+
+@slider
+amp = 10^(slider15/20);
+att = 1 / (srate * (slider13 / 1000));
+rel = 1 / (srate * (slider14 / 1000));
+res_v = slider3 * 0.98;
+
+@block
+while (midirecv(offset, msg1, msg23)) (
+  status = msg1 & $xF0; note = msg23 & $x7F; vel = (msg23/256) & $x7F;
+  status == $x90 && vel > 0 ? (
+    target_f = 440 * 2^((note-69)/12);
+    v = 0; found = -1;
+    while(v < MAX_VOICES && found < 0)(
+      voices[v*mem_size + 5] <= 0 ? found = v; v += 1;
+    );
+    found >= 0 ? (
+      idx = found * mem_size;
+      voices[idx + 0] = target_f; voices[idx + 5] = vel/127;
+      voices[idx + 2] = rand(1); voices[idx + 4] = 0;
+    );
+  );
+  status == $x80 || (status == $x90 && vel == 0) ? (
+    v = 0; f = 440 * 2^((note-69)/12);
+    while(v < MAX_VOICES)(
+      idx = v * mem_size;
+      abs(voices[idx + 0] - f) < 1 ? voices[idx + 5] = 0; v += 1;
+    );
+  );
+  midisend(offset, msg1, msg23);
+);
+
+@sample
+// Input capture
+rawExtL = spl0; rawExtR = spl1;
+ext_mono = (rawExtL + rawExtR) * 0.5 * slider6;
+
+current_f = current_f * 0.999 + target_f * 0.001;
+outL = 0; outR = 0;
+v = 0;
+while(v < MAX_VOICES)(
+  idx = v * mem_size;
+  target = voices[idx + 5];
+  voices[idx + 4] += (target > 0 ? att : -rel);
+  voices[idx + 4] = max(0, min(1, voices[idx + 4]));
+  env = voices[idx + 4];
+  env > 0 ? (
+    f = voices[idx + 0];
+    voices[idx + 7] += ((f * 0.05) * (1 + slider1)) / srate;
+    voices[idx + 7] > 1 ? voices[idx + 7] -= 1;
+    timbal = voices[idx + 7] < (0.1 * slider5) ? 1 : 0;
+    noise = (rand(2) - 1);
+    excitation = noise * (1 - slider5) + (noise * timbal * slider5 * 6);
+    voices[idx + 6] = voices[idx + 6] * res_v + excitation * (1 - res_v);
+    sig = (excitation - voices[idx + 6]) * slider3 + (noise * (1 - slider3) * 0.2);
+    pan = voices[idx + 2] + sin(play_pos * slider2 + v) * 0.15 + (slider4 - 0.5);
+    pan = max(0, min(1, pan));
+    outL += sig * env * (1 - pan);
+    outR += sig * env * pan;
+  );
+  v += 1;
+);
+
+mono_excitation = (outL + outR) * 0.5 + ext_mono;
+
+// --- RESONANCE ENGINES ---
+air_m = buf_a[ptr_a]; buf_a[ptr_a] = mono_excitation + (air_m * 0.4); 
+ptr_a = (ptr_a + 1) % ((srate*0.02)|0);
+fa = 2 * sin($pi * 3000 / srate); 
+fa_h = air_m - fa_l - 0.5 * fa_b; fa_b = fa * fa_h + fa_b; fa_l = fa * fa_b + fa_l;
+
+wire_m = buf_w[ptr_w]; buf_w[ptr_w] = mono_excitation + (wire_m * 0.96); 
+ptr_w = (ptr_w + 1) % ((srate*0.005)|0);
+fw = 2 * sin($pi * min(srate*0.4, current_f * 2.0) / srate); 
+fw_h = wire_m - fw_l - 0.05 * fw_b; fw_b = fw * fw_h + fw_b; fw_l = fw * fw_b + fw_l;
+
+ground_m = buf_g[ptr_g];
+g_in = mono_excitation + (ground_m * 0.94);
+g_in = max(-1, min(1, g_in * 1.15));
+buf_g[ptr_g] = g_in; ptr_g = (ptr_g + 1) % ((srate*0.06)|0);
+fg = 2 * sin($pi * (current_f * 0.5) / srate);
+fg_h = ground_m - fg_l - 0.15 * fg_b; fg_b = fg * fg_h + fg_b; fg_l = fg * fg_b + fg_l;
+
+// Final Mix Calculation
+m_sum = fa_b * slider10 + fw_b * slider11 + fg_b * slider12 * 2.5;
+
+// Apply Wet/Dry to the External Signal path only
+finalExtL = rawExtL * (1 - slider7) + (m_sum * slider7);
+finalExtR = rawExtR * (1 - slider7) + (m_sum * slider7);
+
+spl0 = (finalExtL + outL) * amp;
+spl1 = (finalExtR + outR) * amp;
