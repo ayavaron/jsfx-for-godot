@@ -307,7 +307,9 @@ func _build_ui() -> void:
 	footer.text = ("Keys: A W S E D F T G Y H U J K O L P ;  ·  Z / X octave.   "
 			+ "[color=#fba640]Unreal Piano, Cicada Swarm and Neighborhood[/color] were "
 			+ "vibe-coded by Aya, a musician and REAPER enthusiast. Her non-AI music: "
-			+ "GWID (vocal) and OK I DUNNO (instrumental), on Bandcamp and Spotify.")
+			+ "GWID (vocal) and OK I DUNNO (instrumental), on "
+			+ "[url=https://girlswithdepression.bandcamp.com][color=#fba640]Bandcamp[/color][/url] and Spotify "
+			+ "([url=https://open.spotify.com/artist/4kFWJVGPD9kZS5hTNVZyU9][color=#fba640]GWID[/color][/url], [url=https://open.spotify.com/artist/3UoukZd1quAmQbeYlzDFHI][color=#fba640]OK I DUNNO[/color][/url]).")
 	footer.meta_clicked.connect(func(meta: Variant) -> void: OS.shell_open(str(meta)))
 	column.add_child(footer)
 

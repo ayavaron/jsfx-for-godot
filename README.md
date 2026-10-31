@@ -403,9 +403,10 @@ wrapper, processor and queue. `src/godot` holds the GDExtension bridge.
 
 The demo's Unreal Piano, Cicada Swarm and Neighborhood
 ([`demo/instruments/aya/`](demo/instruments/aya/)) were vibe-coded by Aya, a
-musician and REAPER enthusiast, and are MIT licensed. Her non-AI music is on
-Bandcamp and Spotify: **GWID** for vocal music and **OK I DUNNO** for
-instrumental music.
+musician and REAPER enthusiast, and are MIT licensed. Her non-AI music:
+**GWID** for vocal music and **OK I DUNNO** for instrumental music, both on
+[Bandcamp](https://girlswithdepression.bandcamp.com) (the address is GWID's former name), and on Spotify as
+[GWID](https://open.spotify.com/artist/4kFWJVGPD9kZS5hTNVZyU9) and [OK I DUNNO](https://open.spotify.com/artist/3UoukZd1quAmQbeYlzDFHI).
 
 - **Gemini Unreal Piano**: 16 voices, each mixing a morphing oscillator, FM,
   Karplus-Strong and additive engines. Its round robin is on by default
