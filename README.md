@@ -12,10 +12,10 @@ instruments you send MIDI notes to from GDScript. Each JSFX slider becomes a
 Godot property, so you can automate it with `Tween`, `AnimationPlayer` or one
 line of GDScript.
 
-**[Play the live demo](https://ayavaron.github.io/jsfx-for-godot/)**: three
-JSFX instruments layered over three JSFX effects in a Godot Web export, with
-Rossini's *Barber of Seville* overture as a demo track to tweak while it
-plays. It is about a 54 MB download, almost all of it Godot's engine, and has
+**[Play the live demo](https://ayavaron.github.io/jsfx-for-godot/)**: JSFX
+instruments and effects (a piano through a resonant filter and an airwindows
+reverb by default) in a Godot Web export, with Rossini's *Barber of Seville*
+overture as a demo track to tweak while it plays. It is about a 54 MB download, almost all of it Godot's engine, and has
 been tested in Chrome.
 
 ```gdscript
@@ -164,15 +164,20 @@ imports a shared `lib/lfo.jsfx-inc`. `instruments/simple_synth.jsfx` is an
 8-voice synth with an envelope and filter that responds to notes, the mod
 wheel and pitch bend.
 
-The demo's main scene, `playground/playground.tscn`, layers three instruments
-(the simple synth and [Aya's](#demo-instruments-by-aya) Unreal Piano and Cicada
-Swarm), each on its own bus with a volume and a lo-fi (`downsample_factor`)
-selector. They feed a mix bus with the tremolo, the lowpass and Aya's
-Neighborhood. Every control is generated from the script's
-`get_property_list()`, one tab per script. Other ways to play:
+The demo's main scene, `playground/playground.tscn`, layers
+[Aya's](#demo-instruments-by-aya) Unreal Piano and Cicada Swarm, each on its
+own bus with a volume and a lo-fi (`downsample_factor`) selector. They feed a
+mix bus with the resonant lowpass, Aya's Neighborhood and chmaha's
+[Interstellar](https://github.com/chmaha/airwindows-JSFX-ports) reverb (a GPLv3
+JSFX port of airwindows Galactic, in
+[`demo/effects/chmaha/`](demo/effects/chmaha/) with its license). The starting
+patch is the piano through the lowpass and the reverb. Every script has a tab
+with an on/off switch, and its controls are generated from
+`get_property_list()`. Other ways to play:
 
-- the mouse, touch or the computer keyboard (A W S E D F T G Y H U J K O L P ;,
-  Z/X for octave);
+- the mouse, touch or the computer keyboard, laid out like REAPER's virtual
+  MIDI keyboard (Z–M row plus S D G H J L, Q–P row plus 2 3 5 6 7 9 0; Left
+  and Right arrows shift the octave);
 - the arpeggiator;
 - a demo track: Rossini's *Barber of Seville* overture as a MIDI file, read by
   a small GDScript MIDI parser (`playground/midi_file.gd`). Every part plays on
@@ -424,6 +429,10 @@ musician and REAPER enthusiast, and are MIT licensed. Her non-AI music:
 MIT. See [LICENSE](LICENSE). The bundled EEL2 engine is
 [Cockos WDL](https://github.com/justinfrankel/WDL) under its zlib-style
 license ([details](third_party/wdl/VENDORED.md)).
+
+The demo's Interstellar reverb is chmaha's JSFX port of Chris Johnson's
+airwindows Galactic, GPLv3 (license in its folder); it is a separate script
+file the demo loads, not part of the plugin.
 
 JSFX, EEL2 and REAPER are by [Cockos](https://www.cockos.com/). This project
 is unofficial and not affiliated with or endorsed by Cockos.

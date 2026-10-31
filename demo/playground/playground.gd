@@ -1,12 +1,12 @@
 extends Control
 
-# The playable demo: three JSFX instruments (AudioStreamJSFX), each on its own
-# bus, layered into a Mix bus that carries three JSFX effects. Every knob is
+# The playable demo: JSFX instruments (AudioStreamJSFX), each on its own bus,
+# layered into a Mix bus that carries JSFX effects. Every knob is
 # generated from the script's slider properties, so this page is also a
 # picture of what AudioEffectJSFX exposes to GDScript.
 #
-# Play with the on-screen keys (mouse or touch), the computer keyboard
-# (A W S E D F T G Y H U J K O L P ; with Z / X to shift the octave), the
+# Play with the on-screen keys (mouse or touch), the computer keyboard (laid
+# out like REAPER's virtual MIDI keyboard, arrows shift the octave), the
 # arpeggiator or the demo track. Click the boid to change a parameter.
 
 const Piano := preload("res://playground/piano.gd")
@@ -16,28 +16,35 @@ const Boid := preload("res://playground/boid.gd")
 # Instrument layers. `percussion` marks the layer that also gets the demo
 # track's drum channel (MIDI channel 10), which no other layer plays.
 const LAYERS := [
-	{"name": "Simple Synth", "path": "res://instruments/simple_synth.jsfx",
-		"on": true, "db": -4.0, "percussion": false},
 	{"name": "Unreal Piano", "path": "res://instruments/aya/gemini_unreal_piano.jsfx",
-		"on": true, "db": 0.0, "percussion": false},
+		"on": true, "db": 6.0, "percussion": false},
 	{"name": "Cicada Swarm", "path": "res://instruments/aya/cicada_swarm.jsfx",
-		"on": true, "db": -2.0, "percussion": true},
+		"on": false, "db": -2.0, "percussion": true},
 ]
+# Mix bus chain, in order. `settings` overrides script defaults for the
+# demo's starting patch.
 const EFFECTS := [
-	{"name": "Tremolo", "path": "res://effects/tremolo.jsfx"},
-	{"name": "Resonant lowpass", "path": "res://effects/lowpass.jsfx"},
-	{"name": "Neighborhood", "path": "res://instruments/aya/gemini_neighborhood.jsfx"},
+	{"name": "Resonant lowpass", "path": "res://effects/lowpass.jsfx", "on": true,
+		"settings": {"slider_1_cutoff_hz": 4000.0, "slider_2_resonance_q": 1.6}},
+	{"name": "Neighborhood", "path": "res://instruments/aya/gemini_neighborhood.jsfx",
+		"on": false, "settings": {}},
+	{"name": "Interstellar reverb", "path": "res://effects/chmaha/interstellar.jsfx",
+		"on": true, "settings": {"slider_4_bigness": 0.7, "slider_5_dry_wet": 0.15}},
 ]
 const MIX_BUS := "Mix"
 const LOFI_FACTORS := [1, 2, 4, 8]
 const DEMO_TRACK := "res://music/barber_of_seville_overture.mid"
 const DRUM_CHANNEL := 9
 
-# Physical keys -> semitones above the keyboard octave's C.
+# Physical keys -> semitones above the keyboard octave's C, as in REAPER's
+# virtual MIDI keyboard: the Z row (and S D G H J L) is one octave, the Q row
+# (and 2 3 5 6 7 9 0) the next.
 const KEYMAP := {
-	KEY_A: 0, KEY_W: 1, KEY_S: 2, KEY_E: 3, KEY_D: 4, KEY_F: 5, KEY_T: 6,
-	KEY_G: 7, KEY_Y: 8, KEY_H: 9, KEY_U: 10, KEY_J: 11, KEY_K: 12, KEY_O: 13,
-	KEY_L: 14, KEY_P: 15, KEY_SEMICOLON: 16,
+	KEY_Z: 0, KEY_S: 1, KEY_X: 2, KEY_D: 3, KEY_C: 4, KEY_V: 5, KEY_G: 6,
+	KEY_B: 7, KEY_H: 8, KEY_N: 9, KEY_J: 10, KEY_M: 11, KEY_COMMA: 12, KEY_L: 13,
+	KEY_Q: 12, KEY_2: 13, KEY_W: 14, KEY_3: 15, KEY_E: 16, KEY_R: 17, KEY_5: 18,
+	KEY_T: 19, KEY_6: 20, KEY_Y: 21, KEY_7: 22, KEY_U: 23, KEY_I: 24, KEY_9: 25,
+	KEY_O: 26, KEY_0: 27, KEY_P: 28,
 }
 
 # Am - F - C - G, played as a rising and falling arpeggio, 8 steps per chord.
@@ -68,7 +75,8 @@ var _meter: ProgressBar
 var _fps: Label
 var _track_button: Button
 var _track_time: Label
-var _tabs: TabBar
+var _tab_group := ButtonGroup.new()
+var _current_tab := 0
 var _pages: Array = []    # per tab: the Control holding its rows
 var _controls: Array = [] # per tab: Array of {name, effect, control, row, label}
 var _arp_on := false
@@ -118,11 +126,19 @@ func _setup_audio() -> void:
 	_mix_bus = AudioServer.bus_count
 	AudioServer.add_bus(_mix_bus)
 	AudioServer.set_bus_name(_mix_bus, MIX_BUS)
+	# Make-up gain: the piano and reverb are polite by default. The overture
+	# is very dynamic, so a limiter on Master catches the loud finale.
+	AudioServer.set_bus_volume_db(_mix_bus, 4.0)
+	var limiter := AudioEffectHardLimiter.new()
+	limiter.ceiling_db = -0.5
+	AudioServer.add_bus_effect(0, limiter)
 	for i in EFFECTS.size():
 		var effect := AudioEffectJSFX.new()
 		effect.script_path = EFFECTS[i].path
+		for property in EFFECTS[i].settings:
+			effect.set(property, EFFECTS[i].settings[property])
 		AudioServer.add_bus_effect(_mix_bus, effect)
-		AudioServer.set_bus_effect_enabled(_mix_bus, i, false)
+		AudioServer.set_bus_effect_enabled(_mix_bus, i, EFFECTS[i].on)
 
 	for config in LAYERS:
 		var bus := AudioServer.bus_count
@@ -144,11 +160,12 @@ func _setup_audio() -> void:
 				"enabled": false, "held": {}, "percussion": config.percussion})
 		_set_layer_enabled(_layers.size() - 1, config.on)
 
-	var synth: AudioEffectJSFX = _layers[0].effect
-	synth.set("slider_4_release_ms", 500.0)
 	# The piano's round robin cycles its four engines note by note.
-	var piano: AudioEffectJSFX = _layers[1].effect
+	var piano: AudioEffectJSFX = _layers[0].effect
 	piano.set("slider_30_round_robin_mode", 1)
+	# Its own default (0.18) is quiet once round robin plays one engine per
+	# note and the reverb takes its share.
+	piano.set("slider_1_master_output", 0.45)
 
 
 func _set_layer_enabled(index: int, on: bool) -> void:
@@ -304,7 +321,8 @@ func _build_ui() -> void:
 	footer.fit_content = true
 	footer.scroll_active = false
 	footer.add_theme_color_override("default_color", MUTED)
-	footer.text = ("Keys: A W S E D F T G Y H U J K O L P ;  ·  Z / X octave.   "
+	footer.text = ("Keys as in REAPER's virtual keyboard: Z–M and Q–P rows, Left / Right arrows for octave.   "
+			+ "Interstellar reverb: chmaha's GPLv3 JSFX port of airwindows Galactic.   "
 			+ "[color=#fba640]Unreal Piano, Cicada Swarm and Neighborhood[/color] were "
 			+ "vibe-coded by Aya, a musician and REAPER enthusiast. Her non-AI music: "
 			+ "GWID (vocal) and OK I DUNNO (instrumental), on "
@@ -341,25 +359,22 @@ func _panel(parent: Control, title_text: String) -> VBoxContainer:
 	return rows
 
 
-# Layer switches, volumes and lo-fi factors, then the Mix bus effect switches.
+# Layer volumes and lo-fi factors. On/off switches live on the option tabs.
 func _build_mixer(parent: Control) -> void:
 	var rows := _panel(parent, "Layers")
-	rows.get_parent().custom_minimum_size = Vector2(430, 0)
+	rows.get_parent().custom_minimum_size = Vector2(380, 0)
 	for i in LAYERS.size():
 		var row := HBoxContainer.new()
 		rows.add_child(row)
-		var toggle := CheckButton.new()
-		toggle.text = LAYERS[i].name
-		toggle.button_pressed = LAYERS[i].on
-		toggle.focus_mode = FOCUS_NONE
-		toggle.custom_minimum_size = Vector2(170, 0)
-		toggle.toggled.connect(func(on: bool) -> void: _set_layer_enabled(i, on))
-		row.add_child(toggle)
+		var name_label := Label.new()
+		name_label.text = LAYERS[i].name
+		name_label.custom_minimum_size = Vector2(120, 0)
+		row.add_child(name_label)
 
 		var volume := HSlider.new()
 		volume.focus_mode = FOCUS_NONE
 		volume.min_value = -40.0
-		volume.max_value = 6.0
+		volume.max_value = 12.0
 		volume.step = 0.5
 		volume.value = LAYERS[i].db
 		volume.size_flags_horizontal = SIZE_EXPAND_FILL
@@ -382,49 +397,39 @@ func _build_mixer(parent: Control) -> void:
 			effect.downsample_factor = lofi.get_item_id(index))
 		row.add_child(lofi)
 
-	var effects_title := Label.new()
-	effects_title.text = "Mix effects"
-	effects_title.add_theme_color_override("font_color", ACCENT)
-	rows.add_child(effects_title)
-	var effects_row := HFlowContainer.new()
-	rows.add_child(effects_row)
-	for i in EFFECTS.size():
-		var toggle := CheckButton.new()
-		toggle.text = EFFECTS[i].name
-		toggle.focus_mode = FOCUS_NONE
-		toggle.toggled.connect(func(on: bool) -> void:
-			AudioServer.set_bus_effect_enabled(_mix_bus, i, on))
-		effects_row.add_child(toggle)
-
 	var hint := Label.new()
-	hint.text = "Lo-fi runs a layer at 1/N of the mix rate: less CPU, grittier sound."
+	hint.text = ("Lo-fi runs a layer at 1/N of the mix rate: less CPU, grittier "
+			+ "sound. Switch instruments and effects on and off on their tabs.")
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.add_theme_color_override("font_color", MUTED)
 	hint.add_theme_font_size_override("font_size", 13)
 	rows.add_child(hint)
 
 
-# One tab per layer and effect; only the visible tab's controls are shown,
-# and those are the ones the boid changes.
+# One tab per layer and effect, each with an on/off switch; only the visible
+# tab's controls are shown, and those are the ones the boid changes.
 func _build_options(parent: Control) -> void:
 	var rows := _panel(parent, "")
 	rows.get_parent().size_flags_horizontal = SIZE_EXPAND_FILL
-	_tabs = TabBar.new()
-	_tabs.focus_mode = FOCUS_NONE
-	_tabs.clip_tabs = false
-	rows.add_child(_tabs)
+	var strip := HFlowContainer.new()
+	strip.add_theme_constant_override("h_separation", 10)
+	rows.add_child(strip)
 
+	# [name, effect, initially on, switch callback]
 	var sources := []
 	for i in LAYERS.size():
-		sources.append([LAYERS[i].name, _layers[i].effect])
+		sources.append([LAYERS[i].name, _layers[i].effect, LAYERS[i].on,
+				func(on: bool) -> void: _set_layer_enabled(i, on)])
 	for i in EFFECTS.size():
-		sources.append([EFFECTS[i].name, AudioServer.get_bus_effect(_mix_bus, i)])
+		sources.append([EFFECTS[i].name, AudioServer.get_bus_effect(_mix_bus, i),
+				EFFECTS[i].on,
+				func(on: bool) -> void: AudioServer.set_bus_effect_enabled(_mix_bus, i, on)])
 
-	for source in sources:
-		_tabs.add_tab(source[0])
+	for t in sources.size():
+		var source: Array = sources[t]
 		var scroll := ScrollContainer.new()
 		scroll.size_flags_vertical = SIZE_EXPAND_FILL
 		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-		rows.add_child(scroll)
 		var grid := GridContainer.new()
 		grid.columns = 2
 		grid.size_flags_horizontal = SIZE_EXPAND_FILL
@@ -433,11 +438,61 @@ func _build_options(parent: Control) -> void:
 		scroll.add_child(grid)
 		_pages.append(scroll)
 		_controls.append(_add_slider_controls(grid, source[1]))
-	_tabs.tab_changed.connect(_show_tab)
+
+		var tab := HBoxContainer.new()
+		tab.add_theme_constant_override("separation", 0)
+		strip.add_child(tab)
+		var switch := CheckButton.new()
+		switch.focus_mode = FOCUS_NONE
+		switch.button_pressed = source[2]
+		switch.tooltip_text = "On / off"
+		tab.add_child(switch)
+		var button := Button.new()
+		button.text = source[0]
+		button.toggle_mode = true
+		button.button_group = _tab_group
+		button.focus_mode = FOCUS_NONE
+		_style_tab(button)
+		button.pressed.connect(_show_tab.bind(t))
+		tab.add_child(button)
+		# An off script's controls stay usable but read as inactive.
+		var dim := func(on: bool) -> void:
+			button.modulate = Color.WHITE if on else Color(1, 1, 1, 0.45)
+			grid.modulate = Color.WHITE if on else Color(1, 1, 1, 0.45)
+		dim.call(source[2])
+		switch.toggled.connect(source[3])
+		switch.toggled.connect(dim)
+		if t == 0:
+			button.button_pressed = true
+
+	for page in _pages:
+		rows.add_child(page)
 	_show_tab(0)
 
 
+# Tabs read as text until selected: then an accent underline and tint.
+func _style_tab(button: Button) -> void:
+	var plain := StyleBoxFlat.new()
+	plain.bg_color = Color(0, 0, 0, 0)
+	plain.set_content_margin_all(4)
+	plain.content_margin_left = 6
+	plain.content_margin_right = 6
+	var hover := plain.duplicate()
+	hover.bg_color = Color(1, 1, 1, 0.05)
+	var selected := plain.duplicate()
+	selected.bg_color = Color(ACCENT, 0.12)
+	selected.border_color = ACCENT
+	selected.border_width_bottom = 2
+	button.add_theme_stylebox_override("normal", plain)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", selected)
+	button.add_theme_stylebox_override("hover_pressed", selected)
+	button.add_theme_color_override("font_pressed_color", ACCENT)
+	button.add_theme_color_override("font_hover_pressed_color", ACCENT)
+
+
 func _show_tab(index: int) -> void:
+	_current_tab = index
 	for i in _pages.size():
 		_pages[i].visible = i == index
 
@@ -640,7 +695,7 @@ func _build_boid() -> void:
 func _on_boid_clicked() -> void:
 	var color := _boid.punch()
 	var candidates := []
-	for entry in _controls[_tabs.current_tab]:
+	for entry in _controls[_current_tab]:
 		var skip := false
 		for word in BOID_SKIP:
 			if entry.name.contains(word):
@@ -694,9 +749,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not event is InputEventKey or event.echo:
 		return
 	var key: int = event.physical_keycode
-	if event.pressed and key == KEY_Z:
+	if event.pressed and key == KEY_LEFT:
 		_shift_octave(-1)
-	elif event.pressed and key == KEY_X:
+	elif event.pressed and key == KEY_RIGHT:
 		_shift_octave(1)
 	elif KEYMAP.has(key):
 		if event.pressed and not _key_notes.has(key):

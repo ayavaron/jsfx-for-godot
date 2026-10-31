@@ -155,15 +155,15 @@ def main():
                                  args.timeout_ms)
             page.wait_for_timeout(500)
             # The centre of the canvas is the "start audio" button; then hold
-            # A (C3) on the computer keyboard.
+            # Z (C3, as in REAPER's virtual keyboard).
             box = page.locator("canvas").bounding_box()
             page.mouse.click(box["x"] + box["width"] / 2,
                              box["y"] + box["height"] / 2)
             page.wait_for_timeout(300)
-            page.keyboard.down("a")
+            page.keyboard.down("z")
             processed = wait_for_log(page, logs, "JSFX_PLAYGROUND_SOUND",
                                      args.timeout_ms)
-            page.keyboard.up("a")
+            page.keyboard.up("z")
             if args.wait_for:
                 extra = wait_for_log(page, logs, args.wait_for, args.timeout_ms)
                 if extra is None:
