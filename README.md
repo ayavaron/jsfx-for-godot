@@ -19,27 +19,28 @@ lowpass.slider_1_cutoff_hz = lerpf(400.0, 18000.0, health / max_health)
 
 ## Read this first
 
-> I'm a musician and REAPER enthusiast, not a real engineer. This project was
-> vibe-coded, and I can't guarantee the results.
->
-> But if you're not a real engineer either, and you want this feature set,
-> using it can save you a lot of tokens. Getting a scripting language to run
-> on a game engine's audio thread without crackles, leaks or crashes is the
-> expensive part, and those tokens are already spent:
->
-> - It runs the real EEL2 engine from Cockos' open-source WDL, with its JIT
->   on desktop, not a reimplementation.
-> - The audio thread never locks, allocates memory or reads the disk.
-> - All 263 effects in a stock REAPER install load and run, and all 8 of its
->   bundled synths play.
-> - It works in desktop builds and in Web exports.
-> - It has unit tests, Godot test suites and browser runs behind it (see
->   [Testing](#testing)).
->
-> What it hasn't had: a review by a professional audio programmer, or a run on
-> Linux or macOS. It's MIT licensed, so use it at your own risk.
->
-> — Aya
+This project's owner is a musician and REAPER enthusiast, not a real
+engineer. The whole thing was vibe-coded, and the results come with no
+guarantee.
+
+But if you're not a real engineer either, and you want this feature set,
+using it can save you a lot of tokens. Getting a scripting language to run on
+a game engine's audio thread at all is the expensive part, and those tokens
+are already spent:
+
+- It runs the real EEL2 engine from Cockos' open-source WDL, with its JIT
+  on desktop, not a reimplementation.
+- The audio thread never locks, allocates memory or reads the disk.
+- All 263 effects in a stock REAPER install load and run, and all 8 of its
+  bundled synths play.
+- It works in desktop builds and in Web exports.
+- It has unit tests, Godot test suites and browser runs behind it (see
+  [Testing](#testing)).
+
+What it hasn't had: a review by a professional audio programmer, or a run on
+Linux or macOS. And the audio can still crackle, usually at the same moments
+the frame rate dips (the live demo does it too). It's MIT licensed, so use it
+at your own risk.
 
 ## Why JSFX is good to vibe-code
 
@@ -427,6 +428,8 @@ each.
 - Imported files contribute their `@init` code (function libraries).
   `@sample`/`@block` code inside an import is ignored with a warning.
 - Linux and macOS builds are not yet tested.
+- Audio can crackle when the game hitches: dropouts tend to line up with
+  frame rate dips, and there is no graceful recovery yet.
 
 ## Building from source
 
