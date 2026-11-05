@@ -65,6 +65,8 @@ def main() -> None:
         archive.write(ROOT / "LICENSE", f"{ADDON}/LICENSE")
         archive.write(ROOT / "third_party" / "wdl" / "VENDORED.md",
                       f"{ADDON}/THIRD_PARTY_WDL.md")
+        archive.write(ROOT / "third_party" / "dr_libs" / "VENDORED.md",
+                      f"{ADDON}/THIRD_PARTY_DECODERS.md")
     print(f"wrote {out} ({out.stat().st_size // 1024} KiB, {len(files)} binaries)")
 
 
