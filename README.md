@@ -1,22 +1,13 @@
 # JSFX for Godot
 
-Run REAPER's **JSFX** audio effects inside **Godot 4**, and drive their
-parameters from gameplay.
+**Vibe-code your game's sound.** Ask your AI for a REAPER JSFX effect or
+synth, drop the `.jsfx` file into your Godot 4 project, and wire its knobs to
+gameplay. Save the file and you hear the change in the running editor.
 
-JSFX is the text-based DSP scripting language REAPER uses for its built-in
-and community effects: compressors, filters, delays, distortion, spectral
-tools and more, written in Cockos' EEL2 language. This GDExtension compiles
-`.jsfx` files with the real EEL2 engine (the x64 JIT on desktop) and runs them
-as ordinary Godot `AudioEffect`s on your audio buses, or plays JSFX synths as
-instruments you send MIDI notes to from GDScript. Each JSFX slider becomes a
-Godot property, so you can automate it with `Tween`, `AnimationPlayer` or one
-line of GDScript.
-
-**[Play the live demo](https://ayavaron.github.io/jsfx-for-godot/)**: JSFX
-instruments and effects (a piano through a resonant filter and an airwindows
-reverb by default) in a Godot Web export, with Rossini's *Barber of Seville*
-overture as a demo track to tweak while it plays. It is about a 54 MB download, almost all of it Godot's engine, and has
-been tested in Chrome.
+**[▶ Play the live demo](https://ayavaron.github.io/jsfx-for-godot/)**: a
+vibe-coded piano through a resonant filter and a big reverb, playing Rossini's
+*Barber of Seville* overture while you twist every knob. Click the boid.
+(About 54 MB, almost all of it Godot itself. Tested in Chrome.)
 
 ```gdscript
 var lowpass := load("res://effects/lowpass.jsfx") as AudioEffectJSFX
@@ -26,22 +17,74 @@ AudioServer.add_bus_effect(AudioServer.get_bus_index("Music"), lowpass)
 lowpass.slider_1_cutoff_hz = lerpf(400.0, 18000.0, health / max_health)
 ```
 
+## Read this first
+
+> I'm a musician and REAPER enthusiast, not a real engineer. This project was
+> vibe-coded, and I can't guarantee the results.
+>
+> But if you're not a real engineer either, and you want this feature set,
+> using it can save you a lot of tokens. Getting a scripting language to run
+> on a game engine's audio thread without crackles, leaks or crashes is the
+> expensive part, and those tokens are already spent:
+>
+> - It runs the real EEL2 engine from Cockos' open-source WDL, with its JIT
+>   on desktop, not a reimplementation.
+> - The audio thread never locks, allocates memory or reads the disk.
+> - All 263 effects in a stock REAPER install load and run, and all 8 of its
+>   bundled synths play.
+> - It works in desktop builds and in Web exports.
+> - It has unit tests, Godot test suites and browser runs behind it (see
+>   [Testing](#testing)).
+>
+> What it hasn't had: a review by a professional audio programmer, or a run on
+> Linux or macOS. It's MIT licensed, so use it at your own risk.
+>
+> — Aya
+
+## Why JSFX is good to vibe-code
+
+- **One text file.** No SDK, no compiler, no build step. A useful effect can
+  be 20 lines.
+- **AI assistants already know it.** Years of JSFX code are public on the
+  REAPER forums and GitHub. The demo's piano and cicada synth were written
+  this way.
+- **A fast loop.** Save the file and the running editor recompiles it within
+  a quarter second, keeping your slider values.
+- **Mistakes are cheap.** A script that doesn't compile prints the error with
+  its line number while the last good version keeps playing. A script that
+  never compiled passes audio through untouched.
+- **It also runs in REAPER.** Audition the same file in your DAW.
+
+Try a prompt like this one:
+
+> Write a REAPER JSFX bitcrusher with sliders for bit depth, sample rate
+> reduction and dry/wet.
+
+Save the answer as `res://fx/crusher.jsfx` and add it to a bus. Its three
+sliders show up in the inspector, ready to animate.
+
 ## Who it's for
 
+- **Vibe coders** who want sound that reacts to their game, without asking
+  an AI to write a native audio plug-in.
 - **Game audio designers** who already build sounds in REAPER and want the
   same effects reacting to gameplay in Godot, without porting DSP to C++.
-- **DSP tinkerers** who want a fast scripting loop: edit a `.jsfx` file, save,
-  and hear the change in the running editor (hot reload).
 - **Godot developers** who need effects Godot doesn't ship (bit crushers,
-  waveshapers, resonant filters, custom dynamics) and would rather write 20
-  lines of EEL2 than a native plug-in.
+  waveshapers, resonant filters, custom dynamics).
 - **Procedural and interactive music**: play a JSFX synth from gameplay code,
   positioned in 2D or 3D space like any other sound.
 
-It is not a REAPER host: there's no JSFX graphics (`@gfx`), MIDI routing
-between effects, or file browser. See [Limitations](#limitations).
+It is not a REAPER host: there's no JSFX graphics (`@gfx`) and no MIDI routing
+between effects. See [Limitations](#limitations).
 
-## Features
+## What it does
+
+This GDExtension compiles `.jsfx` files (REAPER's text-based effect format,
+written in Cockos' EEL2 language) and runs them as ordinary Godot
+`AudioEffect`s on your audio buses, or plays JSFX synths as instruments you
+send MIDI notes to from GDScript. Each JSFX slider becomes a Godot property,
+so you can automate it with `Tween`, `AnimationPlayer` or one line of
+GDScript.
 
 - **`AudioEffectJSFX` resource.** Put it on any bus like a built-in effect, in
   the inspector or from code. `.jsfx` files load directly as resources
