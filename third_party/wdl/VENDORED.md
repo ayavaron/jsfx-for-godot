@@ -72,3 +72,18 @@ The following notice is reproduced from the EEL2 sources:
      misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 ```
+
+## Added for strings, files and the preprocessor (2026-11-05)
+
+From the same upstream commit, unmodified:
+
+- `eel2/eel_strings.h` (EEL2 strings, `printf`), `eel2/eel_pproc.h` (the
+  `<? ?>` preprocessor), `eel2/eel_mdct.h` (`mdct`/`imdct`) and
+  `eel2/eel_atomic.h` (`atomic_*`). They are implementation headers, included
+  once by `src/core/jsfx_eel_ext.cpp`, which supplies the hooks they expect.
+- Their WDL helpers: `wdlstring.h`, `ptrlist.h`, `assocarray.h`, `heapbuf.h`,
+  `queue.h`, `mergesort.h` and `win32_utf8.h` (compiled with
+  `WDL_NO_SUPPORT_UTF8`, so no Win32 UTF-8 shims are needed).
+
+JSFX's `file_open()` family is REAPER's own API, not part of WDL; it is
+implemented in `src/core/jsfx_eel_ext.cpp`.

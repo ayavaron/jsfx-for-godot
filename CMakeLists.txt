@@ -132,6 +132,11 @@ add_library(jsfx_wdl STATIC
   src/core/jsfx_host.c
   # Real-time block pool that nseel-ram.c's calloc is redirected to.
   src/core/ram_pool.cpp
+  # Strings, printf, the file_open() family, mdct and the <? ?> preprocessor
+  # (WDL's eel_strings.h, eel_mdct.h, eel_pproc.h), and file decoding
+  # (dr_wav, dr_flac, dr_mp3, stb_vorbis).
+  src/core/jsfx_eel_ext.cpp
+  src/core/file_data.cpp
 )
 target_include_directories(jsfx_wdl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
@@ -159,6 +164,10 @@ endif()
 target_include_directories(jsfx_wdl SYSTEM PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/wdl/eel2
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/wdl
+)
+target_include_directories(jsfx_wdl SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/dr_libs
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb
 )
 
 # EEL_TARGET_PORTABLE must be visible to our wrapper, which includes ns-eel.h.
@@ -323,6 +332,7 @@ if(JSFX_BUILD_GODOT)
     src/godot/audio_effect_jsfx_instance.cpp
     src/godot/audio_effect_jsfx_loader.cpp
     src/godot/audio_stream_jsfx.cpp
+    src/godot/jsfx_files.cpp
     src/godot/jsfx_runtime.cpp
   )
   add_library(jsfx_gdextension SHARED ${JSFX_GODOT_SOURCES})
@@ -408,11 +418,13 @@ if(JSFX_BUILD_TESTS)
       tests/eel2_context_test.cpp
       tests/processor_test.cpp
       tests/slider_queue_test.cpp
+      tests/strings_files_test.cpp
     )
     target_link_libraries(jsfx_tests PRIVATE jsfx_core Catch2::Catch2WithMain)
     # Lets tests load the demo project's .jsfx files.
     target_compile_definitions(jsfx_tests PRIVATE
-      JSFX_DEMO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/demo")
+      JSFX_DEMO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/demo"
+      JSFX_TESTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests")
     jsfx_set_warnings(jsfx_tests)
     find_package(Threads REQUIRED)
     target_link_libraries(jsfx_tests PRIVATE Threads::Threads)

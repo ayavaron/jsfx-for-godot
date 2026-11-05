@@ -89,6 +89,13 @@ class JsfxDocument {
   const std::vector<JsfxWarning>& warnings() const { return warnings_; }
   const std::string& source_name() const { return source_name_; }
 
+  /// Line numbers in sections refer to the file after `<? ?>` preprocessing.
+  /// Maps such a line back to the line in the original file.
+  int source_line(int line) const noexcept {
+    if (line < 1 || line > static_cast<int>(line_map_.size())) return line;
+    return line_map_[static_cast<std::size_t>(line - 1)];
+  }
+
  private:
   std::array<JsfxSection, static_cast<std::size_t>(JsfxSectionKind::Count)>
       sections_{};
@@ -96,6 +103,7 @@ class JsfxDocument {
   std::vector<JsfxImport> imports_;
   std::vector<JsfxWarning> warnings_;
   std::string source_name_;
+  std::vector<int> line_map_;  // empty unless the file used `<? ?>`
 
   struct ParseState;
   static Result<bool> parse_into(JsfxDocument& document, std::string_view source,

@@ -1,5 +1,6 @@
 #include "jsfx/eel2_context.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -9,6 +10,7 @@
 #include <vector>
 
 #include "jsfx/ram_pool.h"
+#include "jsfx_eel_ext.h"
 #include "jsfx_host.h"
 #include "ns-eel.h"
 
@@ -37,12 +39,15 @@ int line_from_eel_error(const char* message, int fallback) {
 void register_host_functions_once() {
   // EEL2's function table is process-global; fill it before any compile.
   static std::once_flag once;
-  std::call_once(once, [] { jsfx_host_register_functions(); });
+  std::call_once(once, [] {
+    jsfx_host_register_functions();
+    ext::register_functions();  // strings, printf, file API, mdct
+  });
 }
 
-bool compile_section(NSEEL_VMCTX vm, const JsfxSection& section,
-                     JsfxSectionKind kind, int flags, NSEEL_CODEHANDLE* handle,
-                     Error& error) {
+bool compile_section(NSEEL_VMCTX vm, const JsfxDocument& document,
+                     const JsfxSection& section, JsfxSectionKind kind, int flags,
+                     NSEEL_CODEHANDLE* handle, Error& error) {
   *handle = nullptr;
   if (!section.present || section.code.empty()) return true;
 
@@ -53,9 +58,14 @@ bool compile_section(NSEEL_VMCTX vm, const JsfxSection& section,
     // EEL2 returns no handle and no error for code that is only whitespace or
     // comments; REAPER treats that as an empty section.
     if (message == nullptr || *message == '\0') return true;
-    error.line = line_from_eel_error(message, section.first_code_line);
-    error.message = std::string(to_string(kind)) + ": " +
-                    (message != nullptr ? message : "syntax error");
+    // Lines after `<? ?>` preprocessing map back to the original file.
+    const int eel_line = line_from_eel_error(message, section.first_code_line);
+    error.line = document.source_line(eel_line);
+    std::string detail = message;
+    if (error.line != eel_line) {
+      detail = std::to_string(error.line) + detail.substr(detail.find(':'));
+    }
+    error.message = std::string(to_string(kind)) + ": " + detail;
     return false;
   }
 
@@ -68,6 +78,7 @@ bool compile_section(NSEEL_VMCTX vm, const JsfxSection& section,
 struct Eel2Context::Impl {
   NSEEL_VMCTX vm = nullptr;
   void* ram_region = nullptr;  // OS-backed EEL2 memory, see jsfx_host_map_ram
+  ext::State* ext = nullptr;   // strings, files, printf
 
   JsfxHostState host{};
   std::vector<NSEEL_CODEHANDLE> import_code;
@@ -97,6 +108,7 @@ struct Eel2Context::Impl {
     for (auto it = import_code.rbegin(); it != import_code.rend(); ++it) {
       NSEEL_code_free(*it);
     }
+    if (ext != nullptr) ext::destroy_state(ext);
     if (vm != nullptr) {
       jsfx_host_unmap_ram(vm, ram_region, kEelRamSlots);
       NSEEL_VM_free(vm);
@@ -198,6 +210,28 @@ Result<std::unique_ptr<Eel2Context>> Eel2Context::create(
   }
   NSEEL_VM_SetCustomFuncThis(impl->vm, &impl->host);
 
+  // File sliders hold an index into their folder's sorted listing. Start on
+  // the declared default file, or -1 ("none") if the folder lacks it.
+  std::vector<ext::FileSlider> file_sliders;
+  for (const JsfxSlider& slider : document.sliders()) {
+    if (!slider.is_file) continue;
+    ext::FileSlider listing;
+    listing.index = slider.index;
+    listing.folder = slider.file_folder;
+    if (environment.file_provider != nullptr) {
+      listing.names = environment.file_provider->list(slider.file_folder);
+    }
+    const auto found =
+        std::find(listing.names.begin(), listing.names.end(), slider.file_default);
+    *impl->sliders[static_cast<std::size_t>(slider.index - 1)] =
+        found != listing.names.end()
+            ? static_cast<double>(found - listing.names.begin())
+            : -1.0;
+    file_sliders.push_back(std::move(listing));
+  }
+  impl->ext = ext::create_state(impl->vm, &impl->host, environment.file_cache,
+                                environment.file_provider, std::move(file_sliders));
+
   *impl->srate = environment.sample_rate;
   *impl->tempo = environment.tempo;
   *impl->play_state = environment.play_state;
@@ -222,26 +256,29 @@ Result<std::unique_ptr<Eel2Context>> Eel2Context::create(
           "': " + (message != nullptr ? message : "syntax error"));
     }
     impl->import_code.push_back(handle);
+    ext::after_compile(impl->ext, impl->vm);
     NSEEL_code_execute(handle);
   }
 
   // Functions declared in @init must be visible to the other sections.
-  if (!compile_section(impl->vm, document.section(JsfxSectionKind::Init),
+  if (!compile_section(impl->vm, document, document.section(JsfxSectionKind::Init),
                        JsfxSectionKind::Init,
                        NSEEL_CODE_COMPILE_FLAG_COMMONFUNCS, &impl->init_code,
                        error)) {
     return Result<std::unique_ptr<Eel2Context>>::failure(std::move(error));
   }
+  ext::after_compile(impl->ext, impl->vm);
   if (impl->init_code != nullptr) NSEEL_code_execute(impl->init_code);
 
-  if (!compile_section(impl->vm, document.section(JsfxSectionKind::Slider),
+  if (!compile_section(impl->vm, document, document.section(JsfxSectionKind::Slider),
                        JsfxSectionKind::Slider, 0, &impl->slider_code, error) ||
-      !compile_section(impl->vm, document.section(JsfxSectionKind::Block),
+      !compile_section(impl->vm, document, document.section(JsfxSectionKind::Block),
                        JsfxSectionKind::Block, 0, &impl->block_code, error) ||
-      !compile_section(impl->vm, document.section(JsfxSectionKind::Sample),
+      !compile_section(impl->vm, document, document.section(JsfxSectionKind::Sample),
                        JsfxSectionKind::Sample, 0, &impl->sample_code, error)) {
     return Result<std::unique_ptr<Eel2Context>>::failure(std::move(error));
   }
+  ext::after_compile(impl->ext, impl->vm);
 
   // JSFX runs @slider once after @init so that derived state is initialized.
   if (impl->slider_code != nullptr) NSEEL_code_execute(impl->slider_code);
@@ -347,6 +384,14 @@ bool Eel2Context::has_section(JsfxSectionKind kind) const {
   const auto index = static_cast<std::size_t>(kind);
   if (index >= impl_->present.size()) return false;
   return impl_->present[index];
+}
+
+bool Eel2Context::drain_log(std::string& out) {
+  return impl_ != nullptr && ext::drain_log(impl_->ext, out);
+}
+
+bool Eel2Context::take_missed_file(std::string& out) {
+  return impl_ != nullptr && ext::take_missed_file(impl_->ext, out);
 }
 
 double* Eel2Context::variable(std::string_view name) {

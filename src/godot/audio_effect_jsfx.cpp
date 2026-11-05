@@ -24,6 +24,7 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include "audio_effect_jsfx_instance.h"
+#include "jsfx_files.h"
 #include "jsfx_runtime.h"
 #include "jsfx/processor.h"
 #include "jsfx/ram_pool.h"
@@ -241,6 +242,9 @@ void AudioEffectJSFX::_bind_methods() {
                         PropertyInfo(Variant::INT, "data2")));
   ClassDB::bind_method(D_METHOD("_poll_midi_output"),
                        &AudioEffectJSFX::_poll_midi_output);
+  // Per-frame printf/missed-file poll; internal, not intended for scripts.
+  ClassDB::bind_method(D_METHOD("_poll_script_output"),
+                       &AudioEffectJSFX::_poll_script_output);
   ClassDB::bind_method(D_METHOD("reload_script"),
                        &AudioEffectJSFX::reload_script);
   ClassDB::bind_static_method("AudioEffectJSFX",
@@ -287,10 +291,12 @@ AudioEffectJSFX::LoadedScript AudioEffectJSFX::build_script(
 
   loaded.document = std::move(parsed.value());
   loaded.has_document = true;
+  // A (re)load re-reads data files, so edited samples are picked up too.
+  reset_files(path);
 
   for (const jsfx::JsfxSlider& slider : loaded.document.sliders()) {
     const auto slot = static_cast<std::size_t>(slider.index - 1);
-    loaded.values[slot] = slider.default_value;
+    loaded.values[slot] = slider_default(slider);
     if (preserve_values && slider_set_[slot]) {
       loaded.values[slot] = slider_values_[slot];
       loaded.set[slot] = true;
@@ -298,13 +304,14 @@ AudioEffectJSFX::LoadedScript AudioEffectJSFX::build_script(
   }
 
   loaded.sample_rate = effective_sample_rate();
-  jsfx::JsfxEnvironment environment;
-  environment.sample_rate = loaded.sample_rate;
-  auto compiled = jsfx::JsfxProcessor::create(loaded.document, environment);
+  preload_file_sliders(loaded.document, loaded.values);
+  auto compiled = jsfx::JsfxProcessor::create(loaded.document,
+                                              make_environment(loaded.sample_rate));
   if (!compiled.ok()) {
     report_script_error("compile error", path, compiled.error());
     return loaded;
   }
+  report_script_output(*compiled.value());
 
   loaded.prepared = std::move(compiled.value());
   apply_slider_values(*loaded.prepared, loaded.document, loaded.values,
@@ -415,8 +422,7 @@ bool AudioEffectJSFX::reload_script() {
     std::lock_guard<std::mutex> lock(owners_mutex_);
     replacements.reserve(owners_.size());
 
-    jsfx::JsfxEnvironment environment;
-    environment.sample_rate = loaded.sample_rate;
+    const jsfx::JsfxEnvironment environment = make_environment(loaded.sample_rate);
     for (JsfxRuntimeOwner* owner : owners_) {
       auto compiled =
           jsfx::JsfxProcessor::create(loaded.document, environment);
@@ -661,6 +667,18 @@ void AudioEffectJSFX::update_sends_midi() {
     has_owners = !owners_.empty();
   }
   if (has_owners) ensure_midi_output_poll();
+
+  polls_script_output_ = false;
+  for (jsfx::JsfxSectionKind kind :
+       {jsfx::JsfxSectionKind::Init, jsfx::JsfxSectionKind::Slider,
+        jsfx::JsfxSectionKind::Block, jsfx::JsfxSectionKind::Sample}) {
+    const std::string& code = document_.section(kind).code;
+    if (code.find("printf") != std::string::npos ||
+        code.find("file_open") != std::string::npos) {
+      polls_script_output_ = true;
+    }
+  }
+  if (has_owners) ensure_script_output_poll();
 }
 
 void AudioEffectJSFX::ensure_midi_output_poll() {
@@ -717,9 +735,8 @@ std::unique_ptr<jsfx::JsfxProcessor> AudioEffectJSFX::create_processor() {
   ensure_script_loaded();
   if (!has_document_) return nullptr;
 
-  jsfx::JsfxEnvironment environment;
   const double mix_rate = effective_sample_rate();
-  environment.sample_rate = mix_rate;
+  const jsfx::JsfxEnvironment environment = make_environment(mix_rate);
 
   std::unique_ptr<jsfx::JsfxProcessor> processor;
   if (prepared_processor_ != nullptr && prepared_sample_rate_ == mix_rate) {
@@ -735,10 +752,13 @@ std::unique_ptr<jsfx::JsfxProcessor> AudioEffectJSFX::create_processor() {
       return nullptr;
     }
     processor = std::move(compiled.value());
+    report_script_output(*processor);
   }
 
   // The resource may have been changed since the prepared processor was
-  // built; the first processing block must see the current slider values.
+  // built; the first processing block must see the current slider values,
+  // and their files must already be decoded for the audio thread's @slider.
+  preload_file_sliders(document_, slider_values_);
   apply_slider_values(*processor, document_, slider_values_, slider_set_);
   ensure_ram_pool_pump();
   return processor;
@@ -750,6 +770,7 @@ void AudioEffectJSFX::register_owner(JsfxRuntimeOwner* owner) {
     owners_.push_back(owner);
   }
   ensure_midi_output_poll();
+  ensure_script_output_poll();
 }
 
 void AudioEffectJSFX::unregister_owner(JsfxRuntimeOwner* owner) {
@@ -778,6 +799,7 @@ bool AudioEffectJSFX::_set(const StringName& p_name, const Variant& p_value) {
   ensure_script_loaded();
   const jsfx::JsfxSlider* slider = find_slider_by_property(p_name);
   if (slider == nullptr) return false;
+  if (slider->is_file) preload_file_slider(*slider, value);
   return set_slider(slider->index, value);
 }
 
@@ -802,7 +824,9 @@ bool AudioEffectJSFX::_property_get_revert(const StringName& p_name,
                                            Variant& r_property) const {
   const jsfx::JsfxSlider* slider = find_slider_by_property(p_name);
   if (slider == nullptr) return false;
-  if (slider_is_enum(*slider) || slider->is_file) {
+  if (slider->is_file) {
+    r_property = static_cast<int64_t>(std::llround(slider_default(*slider)));
+  } else if (slider_is_enum(*slider)) {
     r_property = static_cast<int64_t>(std::llround(slider->default_value));
   } else {
     r_property = slider->default_value;
@@ -819,8 +843,17 @@ void AudioEffectJSFX::_get_property_list(List<PropertyInfo>* p_list) const {
     PropertyHint hint = PROPERTY_HINT_NONE;
     String hint_string;
     if (slider.is_file) {
-      // File chooser sliders select by index; REAPER's file list is not here.
+      // File sliders pick by index from their folder's sorted listing; -1 is
+      // "none" (the declared default file is missing).
       type = Variant::INT;
+      hint = PROPERTY_HINT_ENUM;
+      const std::vector<std::string> names = file_slider_names(slider);
+      if (slider_default(slider) < 0.0) hint_string = "(none):-1";
+      for (std::size_t i = 0; i < names.size(); ++i) {
+        if (!hint_string.is_empty()) hint_string += ",";
+        hint_string += String::utf8(names[i].c_str()).replace(",", " ").replace(":", " ") +
+                       String(":") + String::num_int64(static_cast<int64_t>(i));
+      }
     } else if (slider_is_enum(slider)) {
       type = Variant::INT;
       hint = PROPERTY_HINT_ENUM;
@@ -853,6 +886,105 @@ void AudioEffectJSFX::_get_property_list(List<PropertyInfo>* p_list) const {
     p_list->push_back(PropertyInfo(type, StringName(slider.property_name.c_str()),
                                    hint, hint_string, PROPERTY_USAGE_DEFAULT));
   }
+}
+
+jsfx::JsfxEnvironment AudioEffectJSFX::make_environment(double sample_rate) const {
+  jsfx::JsfxEnvironment environment;
+  environment.sample_rate = sample_rate;
+  environment.file_provider = file_provider_;
+  environment.file_cache = file_cache_;
+  return environment;
+}
+
+void AudioEffectJSFX::reset_files(const String& path) {
+  file_provider_ = make_godot_file_provider(path);
+  file_cache_ = std::make_shared<jsfx::JsfxFileCache>();
+}
+
+std::vector<std::string> AudioEffectJSFX::file_slider_names(
+    const jsfx::JsfxSlider& slider) const {
+  if (!slider.is_file || file_provider_ == nullptr) return {};
+  return file_provider_->list(slider.file_folder);
+}
+
+double AudioEffectJSFX::slider_default(const jsfx::JsfxSlider& slider) const {
+  if (!slider.is_file) return slider.default_value;
+  // Like the core: the declared default file's index, else -1 ("none").
+  const std::vector<std::string> names = file_slider_names(slider);
+  const auto found = std::find(names.begin(), names.end(), slider.file_default);
+  return found != names.end() ? static_cast<double>(found - names.begin()) : -1.0;
+}
+
+void AudioEffectJSFX::preload_file_slider(const jsfx::JsfxSlider& slider, double value) {
+  if (!slider.is_file || file_cache_ == nullptr || value < -0.5) return;
+  const std::vector<std::string> names = file_slider_names(slider);
+  const auto choice = static_cast<std::size_t>(std::llround(value));
+  if (choice >= names.size()) return;
+  const std::string name = slider.file_folder + "/" + names[choice];
+  if (file_cache_->find_or_open(name, file_provider_.get()) == nullptr) {
+    WARN_PRINT(String("JSFX '") + script_path_ + "': cannot load '" +
+               String::utf8(name.c_str()) + "'");
+  }
+}
+
+void AudioEffectJSFX::preload_file_sliders(const jsfx::JsfxDocument& document,
+                                           const std::array<double, 256>& values) {
+  for (const jsfx::JsfxSlider& slider : document.sliders()) {
+    if (slider.is_file) {
+      preload_file_slider(slider, values[static_cast<std::size_t>(slider.index - 1)]);
+    }
+  }
+}
+
+void AudioEffectJSFX::report_script_output(jsfx::JsfxProcessor& processor) {
+  std::string text;
+  if (processor.drain_log(text)) {
+    // printf output, line by line, tagged with the script.
+    const String prefix = String("[") + script_path_.get_file() + "] ";
+    std::size_t start = 0;
+    while (start < text.size()) {
+      std::size_t end = text.find('\n', start);
+      if (end == std::string::npos) end = text.size();
+      if (end > start) {
+        UtilityFunctions::print(prefix + String::utf8(text.data() + start,
+                                                      static_cast<int64_t>(end - start)));
+      }
+      start = end + 1;
+    }
+  }
+  std::string missed;
+  if (processor.take_missed_file(missed)) {
+    WARN_PRINT(String("JSFX '") + script_path_ + "': file_open(\"" +
+               String::utf8(missed.c_str()) +
+               "\") ran on the audio thread for a file that was not loaded yet. "
+               "Open it in @init, or use a file slider, so it is preloaded.");
+  }
+}
+
+void AudioEffectJSFX::ensure_script_output_poll() {
+  if (output_poll_connected_ || !polls_script_output_ || !on_main_thread()) return;
+  Engine* engine = Engine::get_singleton();
+  SceneTree* tree =
+      engine != nullptr ? Object::cast_to<SceneTree>(engine->get_main_loop())
+                        : nullptr;
+  if (tree == nullptr) return;
+  if (tree->connect("process_frame", Callable(this, "_poll_script_output")) == OK) {
+    output_poll_connected_ = true;
+  }
+}
+
+void AudioEffectJSFX::_poll_script_output() {
+  std::vector<jsfx::JsfxProcessor*> processors;
+  {
+    std::lock_guard<std::mutex> lock(owners_mutex_);
+    for (JsfxRuntimeOwner* owner : owners_) {
+      if (jsfx::JsfxProcessor* processor = owner->jsfx_runtime().current_processor()) {
+        processors.push_back(processor);
+      }
+    }
+  }
+  // Processors are only replaced and freed on this (main) thread.
+  for (jsfx::JsfxProcessor* processor : processors) report_script_output(*processor);
 }
 
 const jsfx::JsfxSlider* AudioEffectJSFX::find_slider_by_property(

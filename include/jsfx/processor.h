@@ -70,6 +70,15 @@ class JsfxProcessor {
   /// Valid until the next call.
   std::span<const MidiMessage> midi_output() const;
 
+  /// Main thread: printf output and files the audio thread could not open
+  /// (see Eel2Context). Safe while another thread runs process().
+  bool drain_log(std::string& out);
+  bool take_missed_file(std::string& out);
+
+  /// Debug/testing: an EEL2 variable's storage (see Eel2Context::variable).
+  /// Main thread only; allocates.
+  double* variable(std::string_view name);
+
   /// Process `frame_count` stereo frames. May be called in place
   /// (`input == output`). No allocation, locking or file I/O.
   void process(const AudioFrame* input, AudioFrame* output, int frame_count);

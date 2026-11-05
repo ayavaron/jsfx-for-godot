@@ -30,6 +30,8 @@ typedef struct JsfxHostState {
   int midi_in_pos;
   JsfxMidiEvent midi_out[JSFX_HOST_MAX_MIDI];
   int midi_out_count;
+  /* Strings, files and printf (jsfx_eel_ext.cpp); opaque to C. */
+  void* ext;
 } JsfxHostState;
 
 /* Backs the first `slots` EEL2 memory slots of `vm` with one virtual-memory

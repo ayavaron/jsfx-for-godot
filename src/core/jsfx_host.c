@@ -236,10 +236,8 @@ void jsfx_host_register_functions(void) {
   /* Short MIDI messages in and out. SysEx and buffer variants are no-ops. */
   NSEEL_addfunc_varparm("midirecv", 3, NSEEL_PProc_THIS, &host_midirecv);
   NSEEL_addfunc_varparm("midisend", 3, NSEEL_PProc_THIS, &host_midisend);
-  NSEEL_addfunc_varparm("midirecv_buf", 1, NSEEL_PProc_THIS, &host_zero);
-  NSEEL_addfunc_varparm("midirecv_str", 1, NSEEL_PProc_THIS, &host_zero);
-  NSEEL_addfunc_varparm("midisend_buf", 1, NSEEL_PProc_THIS, &host_zero);
-  NSEEL_addfunc_varparm("midisend_str", 1, NSEEL_PProc_THIS, &host_zero);
+  /* midirecv_buf/_str and midisend_buf/_str need EEL2 memory and strings;
+   * they live in jsfx_eel_ext.cpp. SysEx is not supported. */
   NSEEL_addfunc_varparm("midisyx", 1, NSEEL_PProc_THIS, &host_zero);
 
   /* Channel/pin configuration: a fixed stereo host. */

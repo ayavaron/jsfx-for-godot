@@ -173,6 +173,20 @@ bool JsfxProcessor::add_midi_input(const MidiMessage& message) {
   return impl_ != nullptr && impl_->context->push_midi_input(message);
 }
 
+bool JsfxProcessor::drain_log(std::string& out) {
+  return impl_ != nullptr && impl_->context != nullptr && impl_->context->drain_log(out);
+}
+
+double* JsfxProcessor::variable(std::string_view name) {
+  return impl_ != nullptr && impl_->context != nullptr ? impl_->context->variable(name)
+                                                       : nullptr;
+}
+
+bool JsfxProcessor::take_missed_file(std::string& out) {
+  return impl_ != nullptr && impl_->context != nullptr &&
+         impl_->context->take_missed_file(out);
+}
+
 std::span<const MidiMessage> JsfxProcessor::midi_output() const {
   if (impl_ == nullptr) return {};
   return {impl_->midi_out.data(), static_cast<std::size_t>(impl_->midi_out_count)};

@@ -78,6 +78,8 @@ void set_os_mapping_enabled(bool enabled) {
 
 bool os_mapping_enabled() { return jsfx_host_os_mapping_enabled() != 0; }
 
+bool in_realtime() { return t_realtime; }
+
 ScopedRealtime::ScopedRealtime() : previous_(t_realtime) { t_realtime = true; }
 
 ScopedRealtime::~ScopedRealtime() { t_realtime = previous_; }

@@ -218,3 +218,18 @@ func test_instrument_stream_receives_midi_while_playing() -> void:
 	keys.set("slider_5_cutoff_hz", 800.0)
 	assert_almost_eq(keys.get_slider(5), 800.0, 1e-6)
 	player.stop()
+
+
+func test_file_sliders_list_their_folder() -> void:
+	var effect := load("res://tests/files/sampler.jsfx") as AudioEffectJSFX
+	assert_not_null(effect)
+	var found := {}
+	for property in effect.get_property_list():
+		if String(property["name"]) == "slider_1_sample":
+			found = property
+	assert_eq(found.get("hint"), PROPERTY_HINT_ENUM, "file slider is an enum")
+	assert_eq(String(found.get("hint_string", "")), "loud.wav:0,quiet.wav:1,tone.flac:2")
+	assert_eq(int(effect.get("slider_1_sample")), 0, "starts on the declared default")
+	assert_eq(effect.property_get_revert("slider_1_sample"), 0)
+	effect.set("slider_1_sample", 1)
+	assert_eq(int(effect.get("slider_1_sample")), 1)

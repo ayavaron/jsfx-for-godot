@@ -94,6 +94,7 @@ int main(int argc, char** argv) {
   bool mono = false;
   std::vector<const char*> files;
   std::vector<std::filesystem::path> import_dirs;
+  std::vector<std::filesystem::path> data_dirs;
   int memory_instances = 0;
 
   for (int i = 1; i < argc; ++i) {
@@ -107,6 +108,8 @@ int main(int argc, char** argv) {
       downsample = std::atoi(argv[++i]);
     } else if (!std::strcmp(argv[i], "--import-dir") && i + 1 < argc) {
       import_dirs.emplace_back(argv[++i]);
+    } else if (!std::strcmp(argv[i], "--data-dir") && i + 1 < argc) {
+      data_dirs.emplace_back(argv[++i]);
     } else if (!std::strcmp(argv[i], "--memory") && i + 1 < argc) {
       memory_instances = std::max(1, std::atoi(argv[++i]));
     } else if (!std::strcmp(argv[i], "--no-os-mapping")) {
@@ -120,6 +123,14 @@ int main(int argc, char** argv) {
   if (files.empty()) {
     std::fprintf(stderr, "usage: jsfx_bench [options] file.jsfx...\n");
     return 2;
+  }
+  // A REAPER install keeps file_open() data next to Effects, in Data.
+  if (data_dirs.empty()) {
+    for (const std::filesystem::path& dir : import_dirs) {
+      std::error_code error;
+      const std::filesystem::path data = dir.parent_path() / "Data";
+      if (std::filesystem::is_directory(data, error)) data_dirs.push_back(data);
+    }
   }
 
   std::mt19937 rng(1234);
@@ -190,6 +201,13 @@ int main(int argc, char** argv) {
     jsfx::JsfxEnvironment environment;
     // Downsampled scripts see the reduced rate, as in the Godot bridge.
     environment.sample_rate = rate / std::clamp(downsample, 1, 8);
+    // file_open() looks next to the script, then in the Data folders.
+    std::vector<std::string> file_dirs{
+        std::filesystem::path(path).parent_path().string()};
+    for (const std::filesystem::path& dir : data_dirs) file_dirs.push_back(dir.string());
+    for (const std::filesystem::path& dir : import_dirs) file_dirs.push_back(dir.string());
+    environment.file_provider = jsfx::make_directory_file_provider(file_dirs);
+    environment.file_cache = std::make_shared<jsfx::JsfxFileCache>();
 
     std::vector<std::filesystem::path> search{
         std::filesystem::path(path).parent_path()};
@@ -223,6 +241,13 @@ int main(int argc, char** argv) {
       continue;
     }
     jsfx::JsfxProcessor& processor = *created.value();
+    if (environment.file_cache->size() > 0) {
+      std::printf("FILES\t%s\t%d\n", path, environment.file_cache->size());
+    }
+    std::string log;
+    if (processor.drain_log(log)) {
+      std::printf("LOG\t%s\t%s\n", path, log.substr(0, log.find('\n')).c_str());
+    }
     processor.set_downsample_factor(downsample);
     processor.set_force_mono(mono);
 

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include <godot_cpp/classes/audio_effect.hpp>
@@ -17,6 +18,8 @@
 #include <godot_cpp/variant/variant.hpp>
 
 #include "jsfx/document.h"
+#include "jsfx/environment.h"
+#include "jsfx/file_data.h"
 
 namespace jsfx {
 class JsfxProcessor;
@@ -117,6 +120,18 @@ class AudioEffectJSFX : public godot::AudioEffect {
   void _poll_midi_output();
   void ensure_midi_output_poll();
   void update_sends_midi();
+
+  // Files (file_open, file sliders) and script output (printf, missed files).
+  jsfx::JsfxEnvironment make_environment(double sample_rate) const;
+  void reset_files(const godot::String& path);
+  std::vector<std::string> file_slider_names(const jsfx::JsfxSlider& slider) const;
+  double slider_default(const jsfx::JsfxSlider& slider) const;
+  void preload_file_slider(const jsfx::JsfxSlider& slider, double value);
+  void preload_file_sliders(const jsfx::JsfxDocument& document,
+                            const std::array<double, 256>& values);
+  void report_script_output(jsfx::JsfxProcessor& processor);
+  void _poll_script_output();
+  void ensure_script_output_poll();
   const jsfx::JsfxSlider* find_slider_by_property(
       const godot::StringName& property) const;
 
@@ -158,6 +173,15 @@ class AudioEffectJSFX : public godot::AudioEffect {
   /// True when the script calls midisend, so midi_sent needs polling.
   bool sends_midi_ = false;
   bool midi_poll_connected_ = false;
+
+  /// File lookup for this script, and the files decoded so far, shared by
+  /// every instance so each file is read once. Replaced on (re)load.
+  std::shared_ptr<jsfx::JsfxFileProvider> file_provider_;
+  std::shared_ptr<jsfx::JsfxFileCache> file_cache_;
+  /// True when the script calls printf or file_open, whose output (printed
+  /// text, files the audio thread could not open) needs a per-frame poll.
+  bool polls_script_output_ = false;
+  bool output_poll_connected_ = false;
 
   mutable std::mutex owners_mutex_;
   std::vector<JsfxRuntimeOwner*> owners_;

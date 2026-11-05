@@ -1,5 +1,7 @@
 #include "jsfx/document.h"
 
+#include "jsfx_eel_ext.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -245,6 +247,16 @@ Result<JsfxSlider> parse_slider_line(std::string_view line, int line_number) {
     const std::size_t first = rest.find(':');
     const std::size_t second =
         first == std::string_view::npos ? first : rest.find(':', first + 1);
+    std::string_view folder = rest.substr(0, first);
+    while (!folder.empty() && (folder.front() == '/' || folder.front() == '\\')) {
+      folder.remove_prefix(1);
+    }
+    slider.file_folder = std::string(folder);
+    if (first != std::string_view::npos) {
+      slider.file_default = std::string(rest.substr(
+          first + 1, second == std::string_view::npos ? std::string_view::npos
+                                                      : second - first - 1));
+    }
     rest = second == std::string_view::npos ? std::string_view{}
                                             : rest.substr(second + 1);
   } else {
@@ -349,6 +361,19 @@ Result<bool> JsfxDocument::parse_into(JsfxDocument& document,
                                       const JsfxImportResolver& resolver,
                                       ParseState& parse_state, bool is_import,
                                       std::string* import_init) {
+  // `<? ?>` blocks run first and generate code, as in REAPER. The main file
+  // keeps a line map so errors still point at the original line.
+  std::string preprocessed;
+  if (source.find("<?") != std::string_view::npos) {
+    std::string error;
+    std::vector<int> line_map;
+    if (!ext::preprocess(source, preprocessed, is_import ? nullptr : &line_map,
+                         error)) {
+      return Result<bool>::failure(error, std::atoi(error.c_str()));
+    }
+    source = preprocessed;
+    if (!is_import) document.line_map_ = std::move(line_map);
+  }
   const std::vector<SourceLine> lines = split_lines(source);
 
   enum class State { Header, InSection, Stripped };

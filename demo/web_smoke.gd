@@ -76,6 +76,13 @@ func _ready() -> void:
 		add_child(synth_player)
 		synth_player.play()
 
+	# File probe: `?files=1` loads files_check.jsfx, whose @init opens one file
+	# of each kind and prints JSFX_FILES with what it read.
+	if OS.has_feature("web") and str(JavaScriptBridge.eval(
+			"new URLSearchParams(location.search).get('files') || ''")) == "1":
+		var files := load("res://files_check/files_check.jsfx") as AudioEffectJSFX
+		print("JSFX_FILES_LOADED=", files != null)
+
 	print("JSFX_WEB_READY")
 
 

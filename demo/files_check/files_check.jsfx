@@ -1,0 +1,30 @@
+desc: file_open check (JSFX for Godot)
+// Opens one file of each supported kind and prints what it read. The browser
+// smoke test (web_smoke.gd, ?files=1) checks the printed counts in a Web export,
+// where Godot's imported audio and the export filters decide what is readable.
+slider1:/media:notes.txt:File
+
+@init
+function frames(name) local(h, nch, sr, n) (
+  n = -1;
+  h = file_open(name);
+  h >= 0 ? (
+    file_riff(h, nch, sr);
+    n = nch > 0 ? floor(file_avail(h) / nch) : file_avail(h);
+    file_close(h);
+  );
+  n;
+);
+flac = frames("media/tone.flac");
+ogg = frames("media/tone.ogg");
+mp3 = frames("media/tone.mp3");
+wav = frames("media/tone.wav");
+txt = frames("media/notes.txt");
+h = file_open(slider1);
+slider_file = h >= 0 ? file_avail(h) : -1;
+h >= 0 ? file_close(h);
+printf("JSFX_FILES flac=%d ogg=%d mp3=%d wav=%d txt=%d slider=%d\n",
+       flac, ogg, mp3, wav, txt, slider_file);
+
+@sample
+spl0 = spl0;

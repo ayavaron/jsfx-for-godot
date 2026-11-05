@@ -40,6 +40,12 @@ class JsfxRuntime {
   void set_force_mono(bool enabled);
 
   bool has_processor() const;
+
+  /// Main thread: the processor the audio thread is running (or will run
+  /// next). Only for calls documented as safe alongside `process`.
+  jsfx::JsfxProcessor* current_processor() const {
+    return processor_.load(std::memory_order_acquire);
+  }
   std::uint64_t processed_frames() const;
 
   /// Main thread: publish a compiled replacement. Returns true if the old

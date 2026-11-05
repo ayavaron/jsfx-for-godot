@@ -1,0 +1,34 @@
+desc: file_open probe (JSFX for Godot tests)
+// Loops the WAV chosen in slider1; reports a FLAC read in @init with printf.
+slider1:/samples:loud.wav:Sample
+
+@init
+h = file_open("samples/tone.flac");
+flac_frames = 0;
+h >= 0 ? (
+  file_riff(h, fnch, fsr);
+  flac_frames = file_avail(h) / max(fnch, 1);
+  file_close(h);
+);
+printf("file probe: flac %d frames at %d Hz\n", flac_frames, fsr);
+
+@slider
+// Runs on the audio thread when the slider changes: the host preloads it.
+h = file_open(slider1);
+len = 0;
+h >= 0 ? (
+  file_riff(h, nch, sr);
+  len = file_mem(h, 0, 1000000) / max(nch, 1);
+  file_close(h);
+);
+pos = 0;
+
+@sample
+len > 0 ? (
+  spl0 = 0[pos * nch];
+  spl1 = 0[pos * nch + nch - 1];
+  pos += 1;
+  pos >= len ? pos = 0;
+) : (
+  spl0 = spl1 = 0;
+);

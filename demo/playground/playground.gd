@@ -94,7 +94,7 @@ func _ready() -> void:
 	var query := ""
 	if OS.has_feature("web"):
 		query = str(JavaScriptBridge.eval("location.search"))
-		for parameter in ["smoke=", "instances=", "synth="]:
+		for parameter in ["smoke=", "instances=", "synth=", "files="]:
 			if query.contains(parameter):
 				get_tree().change_scene_to_file.call_deferred("res://web_smoke.tscn")
 				return

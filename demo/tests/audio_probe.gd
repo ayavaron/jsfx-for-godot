@@ -190,6 +190,25 @@ spl0 = spl1 = 0;
 	synth_player.stop()
 	echo_player.stop()
 
+	# 4b. file_open: a sampler loops the WAV picked by its file slider -------
+	var sampler := AudioStreamJSFX.new()
+	sampler.jsfx = load("res://tests/files/sampler.jsfx")
+	var sampler_player := AudioStreamPlayer.new()
+	sampler_player.stream = sampler
+	sampler_player.bus = "SynthProbe"
+	root.add_child(sampler_player)
+	sampler_player.play()
+	await _wait(0.2)
+	var loud := await _capture_rms(synth_capture, 0.4)
+	# Changing the slider preloads quiet.wav, then @slider opens it on the
+	# audio thread.
+	sampler.jsfx.set("slider_1_sample", 1)
+	await _wait(0.2)
+	var quiet := await _capture_rms(synth_capture, 0.4)
+	_check(absf(loud - 0.354) < 0.03 and absf(quiet - 0.0707) < 0.01,
+		"file slider WAVs play: loud %.4f (want 0.354), quiet %.4f (want 0.0707)" % [loud, quiet])
+	sampler_player.stop()
+
 	# 5. Instantiation cost and many instances ------------------------------
 	var instantiate_ms: Array[float] = []
 	var buses: Array[int] = []

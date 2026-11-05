@@ -19,9 +19,12 @@ struct JsfxSlider {
   /// Godot shows it with the `exp` range hint; the value itself is unchanged.
   bool logarithmic = false;
 
-  /// File-chooser slider (`slider1:/folder:default.wav:desc`). Godot exposes
-  /// it as a plain index; the file list is not available outside REAPER.
+  /// File-chooser slider (`slider1:/folder:default.wav:desc`). Its value is
+  /// an index into the folder's sorted file list, which the host supplies
+  /// (JsfxFileProvider::list); `file_open(sliderN)` opens the chosen file.
   bool is_file = false;
+  std::string file_folder;   ///< e.g. "amp_models" (no leading slash)
+  std::string file_default;  ///< e.g. "none" or "00 - Default Mapping.txt"
 
   /// Description started with `-`: REAPER hides the slider from its UI.
   bool hidden = false;

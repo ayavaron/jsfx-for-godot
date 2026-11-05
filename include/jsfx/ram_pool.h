@@ -45,6 +45,10 @@ void note_on_demand_vm();
 void set_os_mapping_enabled(bool enabled);
 bool os_mapping_enabled();
 
+/// True while a ScopedRealtime is active on this thread (the audio thread
+/// inside JsfxProcessor::process).
+bool in_realtime();
+
 /// Marks the current thread as real-time while in scope: EEL2 block requests
 /// go to the pool instead of calloc.
 class ScopedRealtime {

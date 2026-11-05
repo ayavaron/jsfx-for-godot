@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include "jsfx/document.h"
@@ -53,6 +54,12 @@ class Eel2Context {
   void clear_midi();
 
   bool has_section(JsfxSectionKind kind) const;
+
+  /// Main thread. `drain_log` appends what the script printed with printf
+  /// since the last call; `take_missed_file` reports a file the audio thread
+  /// could not open because nobody preloaded it. Both return false if empty.
+  bool drain_log(std::string& out);
+  bool take_missed_file(std::string& out);
 
   /// Debug/escape hatch: the EEL2 variable's storage, or nullptr. The pointer
   /// is valid for this context's lifetime. Allocates when converting `name`,

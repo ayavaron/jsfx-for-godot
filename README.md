@@ -56,8 +56,15 @@ between effects, or file browser. See [Limitations](#limitations).
   the portable interpreter on Web, ARM and iOS. Supported: `@init`, `@slider`,
   `@block`, `@sample`, user functions, the 8M-slot memory model, `import` of
   `.jsfx-inc` libraries, and the JSFX host API: `slider()`, `spl()`, `fft`/
-  `ifft`/`fft_real`/`convolve_c`, `time_precise()`, `srate`, `tempo`,
-  `beat_position`, `num_ch` and more.
+  `ifft`/`fft_real`/`convolve_c`, `mdct`/`imdct`, `time_precise()`, `srate`,
+  `tempo`, `beat_position`, `num_ch` and more.
+- **Strings, files and the preprocessor.** EEL2 strings (`strcpy`, `sprintf`,
+  `match`, `#named` strings, ...) and `printf` (to Godot's Output panel), the
+  `<? ?>` code preprocessor with `config:` defaults, and JSFX's file API:
+  `file_open` reads WAV, FLAC, Ogg Vorbis and MP3 samples or text files, and
+  file sliders become a dropdown of their folder. Files are decoded on the
+  main thread, so the audio thread never touches the disk. See
+  [Loading files](#loading-files).
 - **Hot reload.** Save a `.jsfx` file and the editor recompiles it within a
   quarter second, swapping the running effect and keeping your slider
   values. A script that fails to compile logs the EEL2 error with
@@ -67,8 +74,9 @@ between effects, or file browser. See [Limitations](#limitations).
   `AudioStreamPlayer`, `AudioStreamPlayer2D` or `AudioStreamPlayer3D`.
   `note_on`, `note_off`, `control_change`, `pitch_bend`, `all_notes_off` and
   raw `send_midi` feed the script's `midirecv`, and anything it sends with
-  `midisend` arrives as the `midi_sent` signal. Bus effects receive MIDI the
-  same way.
+  `midisend` arrives as the `midi_sent` signal (also through the
+  `midirecv_buf`/`_str` and `midisend_buf`/`_str` variants). Bus effects
+  receive MIDI the same way.
 - **Real-time safe.** The audio thread never locks, allocates, parses or
   compiles. Parameter changes travel through a lock-free queue, and hot reload
   is an atomic pointer swap with deferred reclamation.
@@ -190,6 +198,46 @@ naming the change. It's a small argument for treating sound parameters as
 part of game feel. The page shows its FPS, and it runs on desktop and as a
 Web export.
 
+### Loading files
+
+`file_open` finds files the way REAPER does, relative to:
+
+1. the script's folder;
+2. the folder in the project setting `audio/jsfx/data_path` (default
+   `res://`), which stands in for REAPER's `Data` folder;
+3. the project root.
+
+WAV, FLAC, Ogg Vorbis and MP3 decode to samples (`file_riff` reports channels
+and rate; `file_mem`, `file_var` and `file_avail` read them). Any other file
+is text: `file_mem`/`file_var` read its numbers and `file_string` its lines.
+A file slider (`slider1:/amp_models:none:Model`) shows the files in its
+folder as a dropdown, and `file_open(slider1)` opens the chosen one.
+
+To use a REAPER effect that loads data, copy the data with it. For DrNine,
+copy `Data/DrNine/` next to `DrNine.jsfx` or into your data path.
+
+**The audio thread never reads the disk.** Files opened in `@init` (and the
+first `@slider`) load on the main thread. When you set a file slider, the
+chosen file is decoded before the audio thread's `@slider` sees the new
+value. Each file is decoded once per `AudioEffectJSFX` and shared by its
+instances. If a script opens a file by a computed name in `@block`,
+`@sample` or a later `@slider` and nothing has loaded it, `file_open` returns
+-1 and Godot prints a warning naming the file. Decoded audio stays in memory
+at 8 bytes per sample per channel (a minute of 44.1 kHz stereo is 42 MB), so
+keep samples short.
+
+**Exports:** Godot imports `.wav`, `.ogg` and `.mp3` as audio streams and
+leaves the original files out of exports. Set those files' import mode to
+**Keep File (exported as is)**. As a fallback, imported MP3s and WAVs imported
+with *Compress Mode: Disabled* are read back from the imported resource; the
+default compressed (QOA) WAV import cannot be. Add other data files (`*.flac`,
+`*.txt`, ...) to your export preset's include filter. The demo's
+`files_check/` folder shows each case and is checked in the browser.
+
+String functions can allocate when they change a string, as in REAPER. That
+is fine in `@init` and `@slider`, where scripts normally build strings; avoid
+growing strings in `@sample`.
+
 ### Using REAPER's effects
 
 Copy a `.jsfx` file (and any `.jsfx-inc` files it imports) into your project.
@@ -201,25 +249,23 @@ community JSFX have various licenses, and many are GPL/LGPL.
 
 All 263 effects in a stock REAPER install (`InstallData/Effects`, including
 the bundled community packs) went through the engine headlessly with 2 seconds
-of noise each.
+of noise each, with REAPER's `Data` folder as the data path.
 
 | Result | Effects |
 |---|---|
-| Load and run, finite output, no crashes | **234 (89%)** |
-| Need `file_open` (load samples or impulse responses from disk) | 10 |
-| Use the `<? ?>` EEL preprocessor | 9 |
-| Need EEL2 string functions (`sprintf`, `strcpy`, `strlen`) | 6 |
-| Need `mdct`/`imdct` | 4 |
+| Load and run, finite output, no crashes | **263 (100%)** |
 
-Most of the 234 are audio effects, which work fully. MIDI effects receive the
+Until v0.3.0, 29 of them failed: 10 need `file_open`, 9 the `<? ?>`
+preprocessor, 6 string functions and 4 `mdct`. MIDI effects receive the
 messages you send from GDScript, and their `midisend` output arrives as the
-`midi_sent` signal. Only one of REAPER's 8 bundled synths loads (Tolerable
-Tines, which plays correctly as an `AudioStreamJSFX`): the others load their
-samples with `file_open` or need string functions.
+`midi_sent` signal. All 8 of REAPER's bundled synths play as an
+`AudioStreamJSFX`, including the sample-based DrNine, MajorGeneralMIDI and
+SynthyMcSynthface (with their `Data` folders copied over). ChamberOrgan starts
+with every stop off, so turn on sliders 1-5 (its stops) to hear it.
 
 Supported beyond the basics: named sliders (`slider1:name=0<...>`), up to 256
 sliders, `:log`/`:sqr` slider shapes, hidden sliders (`-description`), file
-sliders (exposed as an index), enum labels, repeated sections, sloppy headers
+sliders (a dropdown of their folder), `config:` lines, enum labels, repeated sections, sloppy headers
 that REAPER tolerates, and `import`.
 
 ## Performance impact
@@ -232,15 +278,15 @@ Run them on your own hardware to compare.
 
 ### CPU (audio thread)
 
-Per effect instance at 48 kHz stereo, 512-frame blocks, x64 JIT, across the
-234 working REAPER effects:
+Per effect instance at 48 kHz stereo, 512-frame blocks, x64 JIT, across all
+263 REAPER effects:
 
 | | Time per 512-frame block | Share of one CPU core |
 |---|---|---|
 | Median effect | 21 µs | **0.20%** |
-| 90th percentile | 52 µs | 0.49% |
-| 99th percentile | 509 µs | 4.8% |
-| Heaviest (multiband correlation meter) | 775 µs | 7.3% |
+| 90th percentile | 70 µs | 0.66% |
+| 99th percentile | 512 µs | 4.8% |
+| Heaviest (multiband correlation meter) | 901 µs | 8.4% |
 
 Typical game effects sit at the low end. The demo `gain.jsfx` uses 0.09% of a
 core, `lowpass.jsfx` 0.17% and `tremolo.jsfx` 0.19%. Godot mixes on its own
@@ -263,7 +309,9 @@ works well for background voices and radios.
 **Instruments** cost CPU while playing whether or not notes are sounding,
 since the script runs every block. The demo synth uses 0.25% of a core idle
 and 0.86% with all 8 voices sounding (x64 JIT); in the interpreter used on Web
-that is 0.96% and 6.1%. Stop players you aren't using.
+that is 0.96% and 6.1%. REAPER's bundled synths cost more even when silent:
+DrNine 2.1%, MajorGeneralMIDI 2.4%, ChamberOrgan 4.5% and LordOfTheRinks
+4.8%. Stop players you aren't using.
 
 `force_mono` makes the output mono (left channel into both outputs). It does
 **not** reduce CPU, because a stereo script still runs all its per-channel
@@ -303,8 +351,10 @@ thread the first time a script touches them.
 
 ### Load time (main thread)
 
-Parsing and compiling a script takes a median of **2.3 ms** (max 7.4 ms
-across the REAPER corpus). This happens when `script_path` is set or a `.jsfx`
+Parsing and compiling a script and running its `@init` takes a median of
+**0.24 ms** across the REAPER corpus (90th percentile 0.85 ms). Synths that
+decode samples in `@init` take longer: DrNine 6.7 ms, MajorGeneralMIDI
+13.7 ms, SynthyMcSynthface 21.7 ms. This happens when `script_path` is set or a `.jsfx`
 resource loads, and again for each extra bus instance or hot reload. In Godot,
 creating a lowpass effect and adding it to a bus took about 1 ms. Create
 effects during loading screens rather than mid-gameplay if you need perfectly
@@ -312,20 +362,21 @@ flat frame times.
 
 ### Binary size
 
-The Windows release DLL is 692 KB with the C++ runtime linked statically, so
-players don't need the VC++ redistributable. The Web side module is about
-7 MB.
+The Windows release DLL is 1.0 MB with the C++ runtime linked statically, so
+players don't need the VC++ redistributable. The Web side module is 7.5 MB
+(7.0 MB threaded). The WAV/FLAC/Ogg/MP3 decoders account for about 340 KB of
+each.
 
 ## Limitations
 
 - No `@gfx` (JSFX UI) or `@serialize`. Godot's inspector and resource
   serialization replace them.
-- No EEL2 strings, `file_*` functions, `<? ?>` preprocessor or `mdct`. Effects
-  that need them fail to compile and pass audio through unchanged, with the
-  error logged.
-- MIDI is short messages only (no SysEx: the `_buf`/`_str` variants are
-  no-ops), arrives at the start of the next mix block rather than at an exact
-  sample, and is not routed between effects.
+- Files are read-only: there is no writing (`@serialize` is stripped), and
+  on the audio thread `file_open` only finds files already loaded (see
+  [Loading files](#loading-files)).
+- MIDI is short messages only (SysEx is dropped), arrives at the start of the
+  next mix block rather than at an exact sample, and is not routed between
+  effects.
 - Stereo only (`spl0`/`spl1`). `num_ch` is 2.
 - `tempo` defaults to 120 BPM and `play_state` to "playing", with
   `beat_position`/`play_position` advancing in real time. Godot has no
@@ -371,12 +422,12 @@ Linux/macOS: `cmake -S . -B build/godot -G Ninja -DCMAKE_BUILD_TYPE=Release
 
 | Suite | What it covers | Command |
 |---|---|---|
-| Catch2 (29 cases) | Parser leniency, imports, host functions, MIDI in/out, the demo synth playing and releasing notes, FFT, gain accuracy (RMS within 1e-6), memory bounds, the Web memory path (forced on desktop), denormal flushing, lock-free queue under contention, lo-fi modes | `ctest --preset windows-release` |
+| Catch2 (42 cases) | Parser leniency, imports, host functions, MIDI in/out (including `_buf`/`_str`), strings and `printf`, the `<? ?>` preprocessor and its line numbers, `mdct`, atomics, `file_open` on WAV/FLAC/Ogg/MP3/text fixtures, file sliders, audio-thread file misses, the demo synth playing and releasing notes, FFT, gain accuracy (RMS within 1e-6), memory bounds, the Web memory path (forced on desktop), denormal flushing, lock-free queue under contention, lo-fi modes | `ctest --preset windows-release` |
 | Smoke | Registration, loader, properties, serialization, hot reload, teardown | `godot --headless --path demo --script res://tests/extension_smoke.gd` |
-| GUT (9 tests) | Property hints and serialization, imports, threaded loading, Tween automation, parameter-burst stress, the instrument MIDI API | `tools/fetch_gut.ps1`, then `godot --headless --path demo -s addons/gut/gut_cmdln.gd -gdir=res://tests/unit -gexit` |
-| Audio probe | Real audio: output accuracy, 400+ hot reloads while playing, downsampled `srate`, a synth playing and releasing notes, `midisend` reaching `midi_sent`, 17 live instances | `godot --headless --audio-driver WASAPI --path demo --script res://tests/audio_probe.gd` |
-| Browser | Web exports, both threading modes, in Chrome; `--playground` clicks start and holds a key in the playable demo until the synth sounds, and with `?autoplay=1&from=SECONDS` plus `--wait-for JSFX_TRACK_PLAYING` it plays the demo track and reports level and FPS; `?smoke=1` runs the test harness, where `?instances=N` plus `--settle-ms` reports the WebAssembly heap and `?synth=1` plays a chord and reports its level | `tools/serve_web.py` + `tools/browser_smoke.py` |
-| Corpus bench | Every `.jsfx` you point it at: compatibility, CPU, memory (`--no-os-mapping` measures the Web memory path) | `jsfx_bench --import-dir <Effects> <files...>` |
+| GUT (10 tests) | Property hints and serialization, imports, threaded loading, Tween automation, parameter-burst stress, the instrument MIDI API, file slider dropdowns | `tools/fetch_gut.ps1`, then `godot --headless --path demo -s addons/gut/gut_cmdln.gd -gdir=res://tests/unit -gexit` |
+| Audio probe | Real audio: output accuracy, 400+ hot reloads while playing, downsampled `srate`, a synth playing and releasing notes, `midisend` reaching `midi_sent`, a sampler switching WAVs through its file slider, 17 live instances | `godot --headless --audio-driver WASAPI --path demo --script res://tests/audio_probe.gd` |
+| Browser | Web exports, both threading modes, in Chrome; `--playground` clicks start and holds a key in the playable demo until the synth sounds, and with `?autoplay=1&from=SECONDS` plus `--wait-for JSFX_TRACK_PLAYING` it plays the demo track and reports level and FPS; `?smoke=1` runs the test harness, where `?instances=N` plus `--settle-ms` reports the WebAssembly heap and `?synth=1` plays a chord and reports its level, and `?files=1` reads every file kind from the export | `tools/serve_web.py` + `tools/browser_smoke.py` |
+| Corpus bench | Every `.jsfx` you point it at: compatibility, CPU, memory (`--no-os-mapping` measures the Web memory path); `--data-dir` sets the `file_open` folder (default: `Data` next to `--import-dir`) | `jsfx_bench --import-dir <Effects> <files...>` |
 
 Import the demo once before running the Godot suites:
 `godot --headless --path demo --editor --quit-after 300`. Use
@@ -402,7 +453,8 @@ Bus effects (`AudioEffectJSFXInstance`) and instruments
 
 `src/core` and `include/jsfx` hold a Godot-free C++20 library: parser, EEL2
 wrapper, processor and queue. `src/godot` holds the GDExtension bridge.
-`third_party/wdl` is an unmodified subset of Cockos WDL.
+`third_party/wdl` is an unmodified subset of Cockos WDL; `third_party/dr_libs`
+and `third_party/stb` hold the audio decoders.
 
 ## Demo instruments by Aya
 
@@ -428,7 +480,10 @@ musician and REAPER enthusiast, and are MIT licensed. Her non-AI music:
 
 MIT. See [LICENSE](LICENSE). The bundled EEL2 engine is
 [Cockos WDL](https://github.com/justinfrankel/WDL) under its zlib-style
-license ([details](third_party/wdl/VENDORED.md)).
+license ([details](third_party/wdl/VENDORED.md)). Audio files are decoded with
+David Reid's [dr_wav, dr_flac and dr_mp3](https://github.com/mackron/dr_libs)
+(public domain or MIT-0) and Sean Barrett's
+[stb_vorbis](https://github.com/nothings/stb) (public domain or MIT).
 
 The demo's Interstellar reverb is chmaha's JSFX port of Chris Johnson's
 airwindows Galactic, GPLv3 (license in its folder); it is a separate script
